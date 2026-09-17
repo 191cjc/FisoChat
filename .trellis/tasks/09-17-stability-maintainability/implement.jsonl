@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-17-stability-maintainability/research/database-integrity.md","reason":"Project-specific schema evidence, selected projection model, migration constraints, and compatibility boundary."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The schema identity change must remain consistent across ingestion, storage, repository queries, APIs, and console consumers."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Centralize schema detection and duplicate-event normalization rather than duplicating payload rules."}

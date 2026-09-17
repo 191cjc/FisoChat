@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fisochat"
+version = "0.1.0"
+description = "Standalone QQ group message recording, viewing and sending extracted from AiQQ"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "qq-botpy>=1.2.1,<2",
+    "aiohttp>=3.9,<4",
+    "aiosqlite>=0.20,<1",
+    "python-dotenv>=1.0,<2",
+    "textual>=1,<7",
+    "textual-image[textual]>=0.12,<0.15",
+    "pillow>=12.1,<13",
+]
+
+[project.scripts]
+fisochat = "fisochat.cli:main"
+fisochat-console = "fisochat.console:main"
+fisochat-send = "fisochat.send:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

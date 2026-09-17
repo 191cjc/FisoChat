@@ -1,0 +1,7 @@
+include .env.example
+include .gitignore
+include MIGRATION.md
+include uv.lock
+recursive-include deploy *.service *.conf
+recursive-include scripts *.py
+recursive-include tests *.py

@@ -1,0 +1,2 @@
+{"file":".trellis/tasks/09-17-stability-maintainability/research/database-integrity.md","reason":"Verify the implementation against the reproduced failure modes, migration invariants, and deferred ledger boundary."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review all readers and writers for group-scoped identity and unchanged external contracts."}
