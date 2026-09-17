@@ -3,11 +3,19 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
+from rich.text import Text
 from textual import events
 from textual.widgets import Input, ListView, RichLog
 
 from fisochat.cli import main as cli_main
-from fisochat.console import FisoChatApp, GroupPicker, HelpScreen, message_text, safe_text
+from fisochat.console import (
+    FisoChatApp,
+    GroupPicker,
+    HelpScreen,
+    SelectableRichLog,
+    message_text,
+    safe_text,
+)
 from fisochat.console_client import ConsoleClient, ConsoleError
 
 
@@ -65,6 +73,111 @@ class FakeClient:
 
 
 class ConsoleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dragging_chat_history_copies_without_changing_the_draft(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(Input)
+            log = app.query_one(SelectableRichLog)
+            messages = deepcopy(app.messages)
+            composer.value = "保留草稿"
+            composer.cursor_position = 2
+            log.clear().write(Text("ab中文cd", style="bold cyan"), scroll_end=False)
+            log.scroll_home(animate=False)
+            await pilot.pause()
+            scroll_y = log.scroll_y
+
+            await pilot.mouse_down(log, offset=(2, 0))
+            await pilot.mouse_up(log, offset=(6, 0))
+            await pilot.pause()
+
+            self.assertIsNotNone(log.text_selection)
+            selected_segments = [
+                segment for segment in log.render_line(0)
+                if "中文" in segment.text
+            ]
+            self.assertEqual(len(selected_segments), 1)
+            self.assertEqual(
+                selected_segments[0].style.bgcolor,
+                log.selection_style.bgcolor,
+            )
+            await pilot.press("ctrl+c")
+            self.assertEqual(app.clipboard, "中文")
+            self.assertTrue(app.is_running)
+            self.assertTrue(composer.has_focus)
+            self.assertEqual(composer.value, "保留草稿")
+            self.assertEqual(composer.cursor_position, 2)
+            self.assertEqual(log.scroll_y, scroll_y)
+            self.assertEqual(app.messages, messages)
+            self.assertEqual(client.sent, [])
+
+            await pilot.press("shift+left", "ctrl+c")
+            self.assertEqual(app.clipboard, "留")
+            self.assertEqual(composer.value, "保留草稿")
+
+    async def test_copying_blank_chat_history_space_is_a_no_op(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            log = app.query_one(SelectableRichLog)
+            log.clear().write(Text("only line"), scroll_end=False)
+            app.copy_to_clipboard("unchanged")
+            await pilot.pause()
+
+            await pilot.mouse_down(log, offset=(0, 0))
+            await pilot.mouse_up(log, offset=(20, 0))
+            await pilot.press("ctrl+c")
+            self.assertEqual(app.clipboard, "only line")
+
+            await pilot.mouse_down(log, offset=(2, 3))
+            await pilot.mouse_up(log, offset=(7, 5))
+            await pilot.press("ctrl+c")
+
+            self.assertTrue(app.is_running)
+            self.assertEqual(app.clipboard, "only line")
+
+    async def test_copy_across_wrapped_lines_uses_visible_line_boundaries(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            log = app.query_one(SelectableRichLog)
+            log.clear().write(Text("abcdefghij"), width=5, scroll_end=False)
+            await pilot.pause()
+
+            await pilot.mouse_down(log, offset=(2, 0))
+            await pilot.mouse_up(log, offset=(3, 1))
+            await pilot.press("ctrl+c")
+
+            self.assertEqual(app.clipboard, "cde\nfgh")
+
+    async def test_copy_after_horizontal_scroll_accounts_for_wide_characters(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(50, 20)) as pilot:
+            await pilot.pause()
+            log = app.query_one(SelectableRichLog)
+            log.clear().write(Text("0123456789中文ABCDEFGHIJ" * 6), scroll_end=False)
+            await pilot.pause()
+            log.scroll_to(x=20, animate=False)
+            await pilot.pause()
+            self.assertTrue(log.render_line(0).text.startswith("GHIJ012345"))
+
+            await pilot.mouse_down(log, offset=(0, 0))
+            await pilot.mouse_up(log, offset=(10, 0))
+            await pilot.press("ctrl+c")
+
+            self.assertEqual(app.clipboard, "GHIJ012345")
+            self.assertTrue(app.is_running)
+
+    async def test_ctrl_q_remains_an_explicit_exit_shortcut(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+q")
+            self.assertFalse(app.is_running)
+        self.assertTrue(client.closed)
+
     async def test_clicking_chat_regions_keeps_typing_at_the_draft_cursor(self):
         client = FakeClient()
         app = FisoChatApp(client)
@@ -327,6 +440,9 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             await app.command("/help")
             self.assertIsInstance(app.screen, HelpScreen)
+            await pilot.press("ctrl+c")
+            self.assertIsInstance(app.screen, HelpScreen)
+            self.assertTrue(app.is_running)
             await pilot.press("escape")
             await app.command("/not-a-command")
             self.assertEqual(client.sent, [])
@@ -334,6 +450,16 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             self.assertEqual(client.sent, [("group-a", "/hello", None)])
+
+    async def test_quit_command_remains_an_explicit_exit_path(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            await app.command("/quit")
+            await pilot.pause()
+            self.assertFalse(app.is_running)
+        self.assertTrue(client.closed)
 
     async def test_empty_service_does_not_send_without_a_group(self):
         client = FakeClient()

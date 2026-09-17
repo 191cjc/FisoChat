@@ -82,6 +82,19 @@ The web viewer, admin API, console, and sender continue consuming the same
 `StoredGroupMessage` and `GroupMessageSummary` projections. No response schema or
 display behavior changes.
 
+## Terminal History Selection
+
+The terminal message stream keeps its Rich-styled, scrollable presentation but
+uses a narrow `RichLog` subclass that supplies the line offsets, selected-text
+extraction, and selection highlighting missing from Textual 6.12's base widget.
+Mouse selection remains owned by Textual's screen selection model, so clicking
+outside a drag still restores composer focus and the draft cursor behavior does
+not change.
+
+`Ctrl+C` copies the active screen selection through Textual's clipboard path.
+`Ctrl+Q` and `/quit` remain explicit exit paths. Selecting or copying history
+must not mutate the composer value, message records, or scroll position.
+
 ## Failure Handling and Observability
 
 Migration and compatibility failures surface during repository initialization,
@@ -109,4 +122,3 @@ The single-table projection stays easy to query and operate, but cannot replay
 all raw events or retain every conflicting non-empty version. The conservative
 fidelity rules protect known data while keeping scope proportional. A complete
 event ledger remains a separate future project.
-

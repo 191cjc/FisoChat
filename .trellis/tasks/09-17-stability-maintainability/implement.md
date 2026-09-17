@@ -56,6 +56,17 @@ deployment instructions.
 - Do not alter systemd or Nginx behavior unless validation proves a required
   operational change.
 
+## 5a. Restore Terminal History Copying
+
+- Add a focused selectable message-log implementation around Textual's
+  `RichLog`, preserving Rich styles, wrapping, scrolling, and existing focus
+  behavior.
+- Bind `Ctrl+C` to copying an active text selection and retain `Ctrl+Q` plus
+  `/quit` as explicit exit paths.
+- Add a terminal regression that drags over chat history, verifies the copied
+  text, and proves the current draft and application remain intact.
+- Update terminal shortcut documentation without changing the web viewer.
+
 ## 6. Validation Gate
 
 Run, in order:
@@ -84,4 +95,3 @@ the production service as part of this task's automated validation.
   the old global-conflict implementation.
 - `README.md` and `MIGRATION.md`: rollback instructions must match actual backup
   and migration behavior.
-

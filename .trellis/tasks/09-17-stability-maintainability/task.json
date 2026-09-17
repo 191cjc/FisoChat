@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Phase 3.3 spec review completed: no .trellis/spec files were changed because the approved PRD assigns the placeholder backend guidelines to the separate 00-bootstrap-guidelines task. The implemented database contracts remain documented in this task's design, research, tests, and operational docs for later incorporation by that task.",
+  "notes": "Phase 3.3 spec review completed: no .trellis/spec files were changed because the approved PRD assigns the placeholder backend guidelines to the separate 00-bootstrap-guidelines task. The implemented database contracts remain documented in this task's design, research, tests, and operational docs. The later terminal-selection fix records Textual 6.12 RichLog offset, blank-selection, wide-character, and copy-key contracts in design.md and regression tests for later incorporation by the bootstrap task.",
   "meta": {}
 }

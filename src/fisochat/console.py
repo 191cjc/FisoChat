@@ -11,12 +11,17 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from rich.cells import get_character_cell_size
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.selection import Selection
 from textual.screen import ModalScreen
+from textual.strip import Strip
 from textual.widgets import Input, Label, ListItem, ListView, RichLog, Static
 from textual_image import renderable as image_renderables
 from textual_image.widget import HalfcellImage, Image as AutoImage
@@ -50,7 +55,8 @@ HELP = """FisoChat · 终端聊天
 /quit                退出终端，后台继续运行
 
 PageUp / PageDown 滚动记录 · Escape 关闭临时视图
-Ctrl+C 退出终端 · 不保存本地输入历史
+鼠标拖选记录后 Ctrl+C 复制 · Ctrl+Q 退出终端
+不保存本地输入历史
 
 按 Escape 或 Enter 返回"""
 
@@ -96,6 +102,97 @@ def message_text(
     if image_attachments(message):
         result.append(f"  /image {message['record_id']} 预览", style="cyan")
     return result
+
+
+class SelectableRichLog(RichLog):
+    """RichLog with Textual's missing line selection support."""
+
+    @staticmethod
+    def _character_offset_at_cell(strip: Strip, cell_offset: int) -> int:
+        cell_position = 0
+        character_offset = 0
+        for character in strip.text:
+            if cell_position >= cell_offset:
+                break
+            cell_position += get_character_cell_size(character)
+            character_offset += 1
+        return character_offset
+
+    @staticmethod
+    def _stylize_range(strip: Strip, start: int, end: int, style: Style) -> Strip:
+        position = 0
+        styled_segments: list[Segment] = []
+        for segment in strip:
+            text, segment_style, control = segment
+            segment_end = position + len(text)
+            selection_start = max(start, position)
+            selection_end = min(end, segment_end)
+            if control or selection_start >= selection_end:
+                styled_segments.append(segment)
+            else:
+                local_start = selection_start - position
+                local_end = selection_end - position
+                if local_start:
+                    styled_segments.append(Segment(text[:local_start], segment_style))
+                selected_style = style if segment_style is None else segment_style + style
+                styled_segments.append(Segment(text[local_start:local_end], selected_style))
+                if local_end < len(text):
+                    styled_segments.append(Segment(text[local_end:], segment_style))
+            position = segment_end
+        return Strip(styled_segments, strip.cell_length)
+
+    def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
+        selection = self.text_selection
+        if y >= len(self.lines):
+            line = Strip.blank(width, self.rich_style)
+            character_scroll_x = 0
+        else:
+            source_line = self.lines[y]
+            character_scroll_x = self._character_offset_at_cell(source_line, scroll_x)
+            if selection is None:
+                line = super()._render_line(y, scroll_x, width)
+            else:
+                line = source_line
+            if selection is not None and (span := selection.get_span(y)) is not None:
+                start, end = span
+                if end == -1:
+                    end = len(line.text)
+                line = self._stylize_range(
+                    line, start, end,
+                    self.screen.get_component_rich_style("screen--selection"),
+                )
+            if selection is not None:
+                line = line.crop_extend(scroll_x, scroll_x + width, self.rich_style)
+        return line.apply_offsets(character_scroll_x, y)
+
+    def get_selection(self, selection: Selection) -> tuple[str, str]:
+        lines = [line.text for line in self.lines]
+        if not lines:
+            return "", "\n"
+
+        start, end = selection
+        start_line = 0 if start is None else max(0, start.y)
+        if start_line >= len(lines):
+            return "", "\n"
+        start_offset = (
+            0 if start is None else min(max(0, start.x), len(lines[start_line]))
+        )
+
+        if end is None or end.y >= len(lines):
+            end_line = len(lines) - 1
+            end_offset = len(lines[end_line])
+        else:
+            end_line = max(0, end.y)
+            end_offset = min(max(0, end.x), len(lines[end_line]))
+
+        if start_line == end_line:
+            text = lines[start_line][start_offset:end_offset]
+        else:
+            selected_lines = [lines[start_line][start_offset:]]
+            selected_lines.extend(lines[start_line + 1:end_line])
+            selected_lines.append(lines[end_line][:end_offset])
+            text = "\n".join(selected_lines)
+        return text, "\n"
 
 
 class ImageScreen(ModalScreen):
@@ -296,7 +393,8 @@ class FisoChatApp(App):
     #empty-groups { height: auto; }
     """
     BINDINGS = [
-        Binding("ctrl+c", "quit", "退出", priority=True),
+        Binding("ctrl+c", "copy_selection", "复制", priority=True),
+        Binding("ctrl+q", "quit", "退出", priority=True),
         Binding("ctrl+g", "groups", "群组", priority=True),
         Binding("ctrl+n", "names", "完整昵称", priority=True),
         Binding("ctrl+r", "refresh", "刷新", priority=True),
@@ -335,7 +433,9 @@ class FisoChatApp(App):
             yield Static("❯ FisoChat", id="brand")
             yield Static("正在连接…", id="connection")
         yield Static("/groups 选择群聊", id="group-title")
-        messages = RichLog(id="messages", wrap=True, highlight=False, markup=False, max_lines=20000)
+        messages = SelectableRichLog(
+            id="messages", wrap=True, highlight=False, markup=False, max_lines=20000,
+        )
         messages.can_focus = False
         yield messages
         yield Static("Enter 发送 · /name 完整昵称 · /groups 切群 · /help 帮助", id="notice")
@@ -378,6 +478,15 @@ class FisoChatApp(App):
         if not self._refreshing:
             self._refreshing = True
             self.run_worker(self._refresh(), group="refresh")
+
+    def action_copy_selection(self) -> None:
+        selection = self.screen.get_selected_text()
+        if selection:
+            self.copy_to_clipboard(selection)
+            return
+        focused = self.focused
+        if isinstance(focused, Input) and focused.selected_text:
+            self.copy_to_clipboard(focused.selected_text)
 
     async def _refresh(self) -> None:
         try:

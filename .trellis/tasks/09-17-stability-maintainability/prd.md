@@ -56,6 +56,9 @@ CLI, and deployment behavior.
 - Preserve all documented user workflows and HTTP contracts.
 - Preserve the delivery invariant that ambiguous send outcomes are never
   retried automatically.
+- Make terminal chat history selectable with the mouse and copyable with
+  `Ctrl+C` without clearing the draft or exiting the application. Keep an
+  explicit keyboard shortcut and `/quit` command for exiting.
 - Do not expose member OpenIDs, credentials, raw event payloads, or admin tokens
   through public routes or new logs.
 - Add regression tests for each corrected migration and merge failure mode.
@@ -79,6 +82,9 @@ CLI, and deployment behavior.
       error before FisoChat writes to it.
 - [ ] Web, console, CLI, health, authentication, mention, image-preview, reply,
       send, and read-only behavior remain compatible.
+- [ ] Dragging across terminal chat history produces a visible text selection;
+      `Ctrl+C` copies it without exiting or changing the draft, while the
+      documented exit paths still work.
 - [ ] All existing and new tests pass, `git diff --check` passes, and the package
       builds successfully from the locked dependency set.
 - [ ] Documentation describes automatic migration, backup location, restore
@@ -90,6 +96,7 @@ CLI, and deployment behavior.
 - Composite-key writes and conservative duplicate-event projection selection.
 - Focused cleanup that makes the changed database path explicit and testable.
 - Database, integration, documentation, and package-build verification.
+- A focused terminal interaction fix for selecting and copying chat history.
 
 ## Out of Scope
 
@@ -111,4 +118,3 @@ CLI, and deployment behavior.
 - Migration runs automatically before the HTTP service or QQ gateway starts.
 - A one-time consistent backup and transactional rebuild are preferred over an
   online dual-write migration; startup will take a short, controlled pause.
-
