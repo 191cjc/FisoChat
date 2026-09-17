@@ -1,11 +1,9 @@
 """Exercise real HTTP routes and SQLite with only the QQ network boundary mocked."""
 
 import asyncio
-import base64
 import io
 import json
 import os
-import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -22,13 +20,7 @@ from fisochat.config import AppConfig
 from fisochat.console_client import ConsoleClient, ConsoleError
 from fisochat.interfaces.qq.client import ChatRecorderClient
 from fisochat.interfaces.qq.gateway import MonitoredBotWebSocket
-from fisochat.main import create_read_only_application
 from fisochat.send import main as send_main
-
-
-def authorization(username="管理员", password="测试口令"):
-    encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
-    return {"Authorization": f"Basic {encoded}"}
 
 
 def event(message_id, *, group="group-1", content="收到的群消息"):
@@ -55,10 +47,11 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         self.config = AppConfig.from_env({
             "QQ_BOT_APPID": "test-id",
             "QQ_BOT_SECRET": "test-secret",
-            "FISOCHAT_VIEW_USERNAME": "管理员",
-            "FISOCHAT_VIEW_PASSWORD": "测试口令",
             "FISOCHAT_ADMIN_TOKEN": "local-token",
             "FISOCHAT_DB": str(Path(self.temporary.name) / "messages.db"),
+            "FISOCHAT_STICKER_DIR": str(Path(self.temporary.name) / "stickers"),
+            "FISOCHAT_STICKER_PUBLIC_BASE_URL": "https://example.com/fisochat",
+            "FISOCHAT_STICKER_SIGNING_SECRET": "s" * 32,
         })
         self.recorder = ChatRecorderClient(self.config)
         self.addAsyncCleanup(self.recorder.close)
@@ -84,37 +77,29 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         with patch("fisochat.interfaces.qq.gateway.BotWebSocket.on_message", new=AsyncMock()):
             await socket.on_message(None, json.dumps(payload))
 
-    async def test_gateway_to_viewer_and_outbound_round_trip(self):
+    async def test_gateway_to_terminal_api_and_outbound_round_trip(self):
         message = event("incoming", content='<script>alert("x")</script>')
         await self.capture(message)
         await self.capture(message)
         self.assertEqual(len(await self.recorder.repository.recent("group-1")), 1)
         self.qq_send.assert_not_called()
-        response = await self.client.get("/group-messages")
-        self.assertEqual(response.status, 401)
-        response = await self.client.get("/group-messages", headers=authorization())
-        body = await response.text()
+        headers = {"Authorization": "Bearer local-token"}
+        response = await self.client.post("/internal/group-messages", headers=headers, json={
+            "group_openid": "group-1", "content": "终端发送",
+        })
         self.assertEqual(response.status, 200)
-        self.assertIn("&lt;script&gt;", body)
-        self.assertNotIn("<script>", body)
-        self.assertNotIn("must-not-render", body)
-        self.assertIn("引用文本", body)
-        self.assertIn("https://example.com/photo.jpg", body)
-        csrf = re.search(r'name="csrf_token" value="([^"]+)"', body).group(1)
-        response = await self.client.post("/group-messages", headers=authorization(), data={
-            "csrf_token": csrf, "group_openid": "group-1", "content": "管理员发送",
-        }, allow_redirects=False)
-        self.assertEqual(response.status, 303)
-        self.assertIn("send=sent", response.headers["Location"])
         self.qq_send.assert_awaited_once()
         records = await self.recorder.repository.recent("group-1")
-        self.assertEqual([record.content for record in records], ["管理员发送", message["d"]["content"]])
+        self.assertEqual([record.content for record in records], ["终端发送", message["d"]["content"]])
         self.assertTrue(records[0].is_bot)
-        self.assertEqual(records[0].payload["origin"], "message_viewer")
+        self.assertEqual(records[0].payload["origin"], "console")
 
     async def test_console_read_api_is_authenticated_and_only_returns_display_fields(self):
         await self.capture(event("incoming"))
-        for route in ("/internal/groups", "/internal/group-messages?group=group-1"):
+        for route in (
+            "/internal/groups", "/internal/group-messages?group=group-1",
+            "/internal/stickers",
+        ):
             self.assertEqual((await self.client.get(route)).status, 401)
         headers = {"Authorization": "Bearer local-token"}
         response = await self.client.get("/internal/groups", headers=headers)
@@ -127,6 +112,12 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("must-not-render", json.dumps(data))
         self.assertNotIn("payload", data["messages"][0])
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+        stickers = await self.client.get("/internal/stickers", headers=headers)
+        self.assertEqual(stickers.status, 200)
+        self.assertEqual((await stickers.json())["stickers"], [])
+        self.assertEqual((await self.client.get("/stickers/" + "a" * 64)).status, 404)
+        self.assertEqual((await self.client.get("/")).status, 404)
+        self.assertEqual((await self.client.get("/group-messages")).status, 404)
 
     async def test_incoming_mentions_display_names_without_rewriting_stored_history(self):
         incoming = event("display-mentions", content='<@target> 和 <@!second>、<qqbot-at-user id="target" />，未知 <@unknown>，例子 &lt;@target&gt;')
@@ -152,12 +143,6 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         group = (await response.json())["groups"][0]
         self.assertEqual(group["latest_content"], expected)
         self.assertNotIn("latest_payload", group)
-        response = await self.client.get("/group-messages?group=group-1", headers=authorization())
-        page = await response.text()
-        self.assertIn("@小明&lt;script&gt;", page)
-        self.assertIn("嵌套 @引用时的名字", page)
-        self.assertNotIn("<script>", page)
-        self.assertNotIn("&lt;@target&gt;", page)
         saved = (await self.recorder.repository.recent("group-1"))[0]
         self.assertEqual(saved.content, incoming["d"]["content"])
         self.assertEqual(saved.payload, incoming["d"])
@@ -404,34 +389,14 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await denied.close()
 
-    async def test_pagination_stays_in_selected_group(self):
-        for index in range(55):
-            await self.recorder.repository.add_gateway_event("GROUP_MESSAGE_CREATE", event(f"m{index}"))
-        await self.capture(event("another", group="other-group", content="另一群记录"))
-        response = await self.client.get("/group-messages?group=group-1", headers=authorization())
-        body = await response.text()
-        self.assertEqual(body.count('<article class="message">'), 50)
-        self.assertIn("查看更早消息", body)
-        before = re.search(r'group=group-1&amp;before=(\d+)', body).group(1)
-        older = await self.client.get(f"/group-messages?group=group-1&before={before}", headers=authorization())
-        self.assertEqual((await older.text()).count('<article class="message">'), 5)
-
-    async def test_invalid_auth_csrf_and_group_do_not_send(self):
-        await self.capture(event("m1"))
-        for token in ("wrong", "非ASCII令牌"):
-            response = await self.client.post("/group-messages", headers=authorization(), data={
-                "csrf_token": token, "group_openid": "group-1", "content": "消息",
-            })
-            self.assertEqual(response.status, 403)
-        response = await self.client.get("/group-messages", headers=authorization(password="错误"))
-        self.assertEqual(response.status, 401)
-        page = await self.client.get("/group-messages", headers=authorization())
-        csrf = re.search(r'name="csrf_token" value="([^"]+)"', await page.text()).group(1)
-        response = await self.client.post("/group-messages", headers=authorization(), data={
-            "csrf_token": csrf, "group_openid": "unknown", "content": "消息",
-        }, allow_redirects=False)
-        self.assertIn("invalid_group", response.headers["Location"])
-        self.qq_send.assert_not_called()
+    async def test_console_surfaces_dynamic_sticker_not_found_error(self):
+        console = ConsoleClient(str(self.client.make_url("/")), "local-token")
+        await console.open()
+        try:
+            with self.assertRaisesRegex(ConsoleError, "表情不存在或已被手动删除"):
+                await console.send_sticker("group-1", "a" * 64)
+        finally:
+            await console.close()
 
     async def test_admin_reply_uses_recorded_context_and_increments_sequence(self):
         message = event("question")
@@ -476,13 +441,14 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recording_failure_reports_sent_without_retry(self):
         await self.capture(event("m1"))
-        page = await self.client.get("/group-messages", headers=authorization())
-        csrf = re.search(r'name="csrf_token" value="([^"]+)"', await page.text()).group(1)
         with patch.object(self.recorder.repository, "add_bot_message", side_effect=OSError):
-            response = await self.client.post("/group-messages", headers=authorization(), data={
-                "csrf_token": csrf, "group_openid": "group-1", "content": "消息",
-            }, allow_redirects=False)
-        self.assertIn("send=sent_unrecorded", response.headers["Location"])
+            response = await self.client.post(
+                "/internal/group-messages",
+                headers={"Authorization": "Bearer local-token"},
+                json={"group_openid": "group-1", "content": "消息"},
+            )
+        self.assertEqual(response.status, 200)
+        self.assertFalse((await response.json())["recorded"])
         self.qq_send.assert_awaited_once()
 
     async def test_gateway_health_transitions_and_reconnect_cancels_watchdog(self):
@@ -496,22 +462,6 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(watchdog, return_exceptions=True)
         self.assertTrue(watchdog.cancelled())
         self.assertIsNone(self.recorder._gateway_watchdog)
-
-    async def test_web_only_hides_composer_and_blocks_all_sending(self):
-        await self.capture(event("m1"))
-        application = create_read_only_application(self.config)
-        async with TestClient(TestServer(application)) as client:
-            response = await client.get("/group-messages", headers=authorization())
-            body = await response.text()
-            self.assertIn("收到的群消息", body)
-            self.assertIn("只读模式", body)
-            self.assertNotIn('<textarea', body)
-            self.assertEqual((await client.post("/group-messages", headers=authorization())).status, 503)
-            self.assertEqual((await client.post("/internal/group-messages")).status, 404)
-            health = await client.get("/health")
-            self.assertEqual(health.status, 200)
-            self.assertEqual((await health.json())["mode"], "web_only")
-        self.qq_send.assert_not_called()
 
     async def test_http_service_starts_before_qq_login_and_closes_on_failure(self):
         client = ChatRecorderClient(replace(self.config, web_port=0))

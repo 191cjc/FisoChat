@@ -173,6 +173,44 @@ class QQMessageSender:
             ),
         )
 
+    async def send_proactive_image(
+        self,
+        *,
+        group_id: str,
+        public_url: str,
+        sticker_id: str,
+        filename: str,
+        mime_type: str,
+        origin: str = "console",
+    ) -> BotSentGroupMessage:
+        media = await self._api.post_group_file(
+            group_openid=group_id,
+            file_type=1,
+            url=public_url,
+            srv_send_msg=False,
+        )
+        file_info = _field(media, "file_info")
+        if not isinstance(file_info, str) or not file_info:
+            raise RuntimeError("QQ media upload response omitted file_info")
+        return await self._send_and_record(
+            group_id=group_id,
+            source_message_id="",
+            msg_seq=None,
+            message_type=7,
+            visible_content="[表情]",
+            record_content="[表情]",
+            request={"media": {"file_info": file_info}},
+            progress=False,
+            origin=origin,
+            attachments=(
+                {
+                    "content_type": mime_type,
+                    "filename": filename,
+                    "sticker_id": sticker_id,
+                },
+            ),
+        )
+
     async def _send_and_record(
         self,
         *,

@@ -8,9 +8,15 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
+from .services.images import MAX_IMAGE_BYTES
+
 
 class ConsoleError(Exception):
     """An actionable message safe to display in the terminal."""
+
+    def __init__(self, message: str, *, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ConsoleClient:
@@ -43,35 +49,75 @@ class ConsoleClient:
             await self._session.close()
             self._session = None
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        uncertain_send: bool = False,
+        timeout: int = 5,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         if self._session is None:
             raise ConsoleError("终端连接尚未初始化。")
-        sending = method == "POST"
         try:
             async with self._session.request(
                 method, self.endpoint + path, allow_redirects=False,
-                timeout=aiohttp.ClientTimeout(total=130 if sending else 5), **kwargs,
+                timeout=aiohttp.ClientTimeout(total=timeout), **kwargs,
             ) as response:
                 if response.status == 401:
                     raise ConsoleError("管理 Token 不正确，请检查终端与后台服务的配置。")
-                if response.status == 404:
-                    raise ConsoleError("后台尚未提供终端接口，请更新并重启 fisochat 服务。")
                 try:
                     data = await response.json()
                 except (ValueError, aiohttp.ContentTypeError):
+                    if response.status == 404:
+                        raise ConsoleError("后台尚未提供终端接口，请更新并重启 fisochat 服务。") from None
                     raise ConsoleError(f"后台返回无效响应（HTTP {response.status}）。") from None
                 if not isinstance(data, dict):
                     raise ConsoleError("后台返回无效数据。")
                 if response.status >= 400 and not (path == "/health" and response.status == 503):
-                    message = data.get("error", {}).get("message", "后台暂时不可用。")
-                    raise ConsoleError(str(message))
+                    error = data.get("error")
+                    details = error if isinstance(error, dict) else {}
+                    message = details.get("message", "后台暂时不可用。")
+                    code = details.get("code", "")
+                    raise ConsoleError(
+                        str(message), code=code if isinstance(code, str) else ""
+                    )
                 if 300 <= response.status < 400:
                     raise ConsoleError("后台地址发生重定向，请检查本机接口配置。")
                 return data
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
-            if sending:
+            if uncertain_send:
                 raise ConsoleError("发送连接中断，结果尚未确认。请检查群消息记录后再决定是否重发。") from None
             raise ConsoleError("无法连接后台。请确认 fisochat 服务正在运行，终端会自动重连。") from None
+
+    async def _image(self, path: str) -> bytes:
+        if self._session is None:
+            raise ConsoleError("终端连接尚未初始化。")
+        try:
+            async with self._session.get(
+                self.endpoint + path,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status == 401:
+                    raise ConsoleError("管理 Token 不正确，请检查终端与后台服务的配置。")
+                if response.status == 404:
+                    raise ConsoleError("表情不存在或已被手动删除。")
+                if response.status != 200:
+                    raise ConsoleError(f"表情预览失败（HTTP {response.status}）。")
+                if response.content_length is not None and response.content_length > MAX_IMAGE_BYTES:
+                    raise ConsoleError("表情文件超过 10 MB。")
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    data.extend(chunk)
+                    if len(data) > MAX_IMAGE_BYTES:
+                        raise ConsoleError("表情文件超过 10 MB。")
+                return bytes(data)
+        except ConsoleError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            raise ConsoleError("无法从后台加载表情预览。") from None
 
     async def groups(self) -> list[dict[str, Any]]:
         return (await self._request("GET", "/internal/groups"))["groups"]
@@ -98,4 +144,36 @@ class ConsoleClient:
             payload["reply_to_message_id"] = reply_to
         if mentions:
             payload["mentions"] = mentions
-        return await self._request("POST", "/internal/group-messages", json=payload)
+        return await self._request(
+            "POST", "/internal/group-messages", json=payload,
+            uncertain_send=True, timeout=130,
+        )
+
+    async def save_sticker(
+        self, group: str, record_id: int, attachment_index: int
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/internal/stickers",
+            json={
+                "group_openid": group,
+                "record_id": record_id,
+                "attachment_index": attachment_index,
+            },
+            timeout=30,
+        )
+
+    async def stickers(self) -> list[dict[str, Any]]:
+        return (await self._request("GET", "/internal/stickers"))["stickers"]
+
+    async def sticker_image(self, sticker_id: str) -> bytes:
+        return await self._image(f"/internal/stickers/{sticker_id}")
+
+    async def send_sticker(self, group: str, sticker_id: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/internal/stickers/{sticker_id}/send",
+            json={"group_openid": group},
+            uncertain_send=True,
+            timeout=130,
+        )

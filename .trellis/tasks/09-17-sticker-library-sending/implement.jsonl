@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-17-sticker-library-sending/research/sticker-architecture.md","reason":"Project-specific evidence and contracts for safe image fetching, filesystem storage, signed retrieval, QQ media sending, terminal UX, and browser retirement."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The feature crosses recorded-message lookup, image validation, filesystem state, HTTP APIs, QQ delivery, and Textual projections; keep every boundary contract aligned."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse one attachment normalizer, protected downloader, auth check, sender path, and message projection rather than duplicating security-sensitive logic."}

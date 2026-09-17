@@ -38,6 +38,17 @@ class BotMessageRepository(Protocol):
 
 
 class GroupMessageSender(Protocol):
+    async def send_proactive_image(
+        self,
+        *,
+        group_id: str,
+        public_url: str,
+        sticker_id: str,
+        filename: str,
+        mime_type: str,
+        origin: str = "console",
+    ) -> BotSentGroupMessage: ...
+
     async def send_proactive_text(
         self,
         *,

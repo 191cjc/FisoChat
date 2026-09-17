@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fisochat"
 version = "0.1.0"
-description = "Standalone QQ group message recording, viewing and sending extracted from AiQQ"
+description = "Terminal-first QQ group message recording, sticker storage and sending"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

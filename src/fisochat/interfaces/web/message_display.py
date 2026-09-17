@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlsplit
+
+
+MAX_ELEMENT_DEPTH = 5
 
 
 _MENTION = re.compile(
@@ -43,3 +48,33 @@ def readable_mentions(content: str, names: Mapping[str, str]) -> str:
         return "@" + name if name else match.group(0)
 
     return _MENTION.sub(replace, content)
+
+
+def element_texts(
+    value: Any, depth: int = 0, *, names: dict[str, str] | None = None,
+) -> Iterable[str]:
+    if depth >= MAX_ELEMENT_DEPTH or not isinstance(value, list):
+        return
+    for element in value:
+        if not isinstance(element, dict):
+            continue
+        element_names = {**(names or {}), **mention_names(element)}
+        content = element.get("content")
+        if isinstance(content, str) and content.strip():
+            yield readable_mentions(content, element_names).strip()
+        yield from element_texts(element.get("msg_elements"), depth + 1, names=element_names)
+
+
+def safe_http_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+    )

@@ -486,8 +486,8 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cli_main([]), 0)
             console.assert_called_once_with([])
         with patch("fisochat.main.main", return_value=0) as serve:
-            self.assertEqual(cli_main(["serve", "--web-only"]), 0)
-            serve.assert_called_once_with(["--web-only"])
+            self.assertEqual(cli_main(["serve"]), 0)
+            serve.assert_called_once_with([])
 
     def test_remote_or_credentialed_console_endpoints_are_rejected(self):
         for endpoint in ("https://example.com", "http://localhost:8789", "http://user:pass@127.0.0.1", "http://127.0.0.1:99999"):

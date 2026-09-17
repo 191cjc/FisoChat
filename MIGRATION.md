@@ -2,7 +2,7 @@
 
 ## 目标和范围
 
-在独立目录中复制群消息推送接收、聊天记录查看、消息发送三个功能，保持原有行为和 SQLite 格式。
+在独立目录中复制群消息推送接收、终端操作和消息发送功能，保持 SQLite 格式。
 新项目默认端口 8789、数据库 `data/group_messages.db`，仅依赖自身源码和声明的 Python 依赖。
 
 ## 来源映射
@@ -11,25 +11,24 @@
 | --- | --- | --- |
 | `src/aiqq/database/{connection,group_messages,migrations,models}.py` | `src/fisochat/database/` | 复制并调整包名，保留原数据库兼容查询 |
 | `src/aiqq/interfaces/qq/gateway.py` | `src/fisochat/interfaces/qq/gateway.py` | 复制原始推送捕获、重连监测 |
-| `src/aiqq/interfaces/web/group_messages.py` | `src/fisochat/interfaces/web/group_messages.py` | 复制页面及发送表单，更名并增加只读模式、Unicode 鉴权与写库失败提示 |
-| `src/aiqq/interfaces/web/admin_messages.py` | `src/fisochat/interfaces/web/admin_messages.py` | 复制本机发送 API 和指定回复检查 |
+| `src/aiqq/interfaces/web/admin_messages.py` | `src/fisochat/interfaces/web/admin_messages.py` | 复制并扩展本机终端 API 和指定回复检查 |
 | `src/aiqq/services/qq/sender.py` | `src/fisochat/services/qq/sender.py` | 保留实际发送与落库逻辑，以及原有消息类型辅助方法 |
 | `src/aiqq/logic/{models,ports}.py` | `src/fisochat/logic/` | 仅提取消息相关模型和接口 |
 | `scripts/send_group_message.py` | `src/fisochat/send.py`、`scripts/send_group_message.py` | 提取命令行发送工具，新增安装入口，匹配新端口和配置 |
-| 数据库、查看页、管理接口、网关、发送器的单元测试 | `tests/` | 同步迁移，另补独立应用集成测试 |
+| 数据库、管理接口、网关、发送器的单元测试 | `tests/` | 同步迁移，另补独立应用集成测试 |
 
 配置、应用组装、运行入口和 QQ 客户端按独立项目重新连接。客户端仅接收并记录群消息，
-删除 AI 会话、内容审核、生图、临时回复页面和指令面板的依赖；网页服务在 QQ 登录前启动，
-使网关异常时仍能查看已有记录和健康状态。
+删除 AI 会话、内容审核、生图、页面和指令面板的依赖；后台 HTTP 服务在 QQ 登录前启动，
+使网关异常时终端仍能读取已有记录和健康状态。
 
 ## 验收
 
 1. 独立安装、构建，不导入 `aiqq` 或原项目文件。
 2. QQ 原始消息（含未 @ 消息）写入临时数据库，重复事件不产生重复行。
-3. 查看页鉴权、分页、HTML 转义、附件、引用、CSRF 正常。
-4. 网页与命令行管理 API 经发送器调用 QQ，确认成功后入库；错误不自动重复发送。
+3. 回环地址终端 API 的鉴权、分页、附件和引用投影正常。
+4. 终端与命令行管理 API 经发送器调用 QQ，确认成功后入库；错误不自动重复发送。
 5. 指定回复必须来自当前群、五分钟内、明确 @ 机器人，并有可用回复序号。
-6. 只读模式不连接 QQ、不显示发送表单、不开放管理发送 API；资源正常关闭。
+6. 服务启动、网关断线和关闭时，数据库及 HTTP 资源正常释放。
 
 真实 QQ 网关和主动发送权限需要部署者填写机器人凭据后验证。本次提取不执行真实群发送。
 

@@ -276,6 +276,48 @@ class QQMessageSenderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.saved[0]["payload"]["origin"], "console")
         self.assertNotIn("msg_seq", repository.saved[0]["payload"])
 
+    async def test_proactive_sticker_uploads_and_sends_once_without_persisting_signed_url(self):
+        api = FakeApi()
+        repository = FakeRepository()
+        sender = QQMessageSender(api, repository, bot_username="FisoChat")
+        signed_url = "https://example.com/fisochat/stickers/" + "a" * 64 + "?expires=1&signature=secret"
+
+        target = await sender.send_proactive_image(
+            group_id="group-1",
+            public_url=signed_url,
+            sticker_id="a" * 64,
+            filename="a" * 64 + ".png",
+            mime_type="image/png",
+        )
+
+        self.assertEqual(target.message_id, "bot-1")
+        self.assertEqual(len(api.uploads), 1)
+        self.assertEqual(len(api.sent), 1)
+        self.assertEqual(api.uploads[0]["url"], signed_url)
+        self.assertEqual(api.sent[0]["msg_type"], 7)
+        payload = repository.saved[0]["payload"]
+        self.assertEqual(payload["attachments"][0]["sticker_id"], "a" * 64)
+        self.assertNotIn(signed_url, repr(repository.saved[0]))
+        self.assertNotIn("signature", repr(repository.saved[0]))
+
+    async def test_proactive_sticker_upload_failures_are_not_retried(self):
+        for error in (TimeoutError("unknown"), RuntimeError("rejected")):
+            api = FakeApi()
+            api.post_group_file = AsyncMock(side_effect=error)
+            repository = FakeRepository()
+            sender = QQMessageSender(api, repository, bot_username="FisoChat")
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
+                await sender.send_proactive_image(
+                    group_id="group-1",
+                    public_url="https://example.com/sticker.png",
+                    sticker_id="a" * 64,
+                    filename="a" * 64 + ".png",
+                    mime_type="image/png",
+                )
+            api.post_group_file.assert_awaited_once()
+            self.assertEqual(api.sent, [])
+            self.assertEqual(repository.saved, [])
+
     async def test_progress_send_is_recorded_and_can_be_recalled(self):
         api = FakeApi()
         repository = FakeRepository()

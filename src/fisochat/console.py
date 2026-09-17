@@ -8,6 +8,7 @@ import os
 import sys
 import unicodedata
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from dotenv import load_dotenv
@@ -29,7 +30,7 @@ from textual_image.widget import HalfcellImage, Image as AutoImage
 from .config import integer, load_admin_token
 from .console_client import ConsoleClient, ConsoleError
 from .console_commands import CommandInput, CommandScreen
-from .console_images import PreviewImage, fetch_image, image_attachments
+from .console_images import PreviewImage, decode_image, fetch_image, image_attachments
 from .console_mentions import MentionMember, MentionSpan
 
 
@@ -44,6 +45,7 @@ HELP = """FisoChat · 终端聊天
 /name                临时展开完整昵称（Esc 恢复缩写）
 /groups              临时选择群组（或 Ctrl+G）
 /image [记录号 [序号]] 预览图片，省略参数查看最近一张
+/stickers             浏览并发送已收藏表情
 /use 序号或群ID      切换到指定群
 /older               加载更早的 50 条记录（或 Ctrl+L）
 /refresh             立即同步新消息（或 Ctrl+R）
@@ -203,6 +205,7 @@ class ImageScreen(ModalScreen):
         Binding("left", "previous", "上一张", show=False, priority=True),
         Binding("right", "next", "下一张", show=False, priority=True),
         Binding("r", "reload", "重试", show=False, priority=True),
+        Binding("s", "save", "收藏", show=False, priority=True),
     ]
     DEFAULT_CSS = """
     ImageScreen { align: center middle; background: #000000 70%; }
@@ -217,7 +220,10 @@ class ImageScreen(ModalScreen):
 
     def __init__(
         self, record: dict[str, Any], attachments: list[dict[str, Any]],
-        *, index: int = 0, mode: str = "auto",
+        *,
+        index: int = 0,
+        mode: str = "auto",
+        save_callback: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         super().__init__()
         self.record_id = record["record_id"]
@@ -225,6 +231,9 @@ class ImageScreen(ModalScreen):
         self.index = index
         self.preview: PreviewImage | None = None
         self._load_worker = None
+        self._save_worker = None
+        self._saving = False
+        self._save_callback = save_callback
         self._preview_closed = False
         protocols = {image_renderables.TGPImage: "Kitty", image_renderables.SixelImage: "Sixel"}
         self.renderer_name = protocols.get(image_renderables.Image, "彩色色块") if mode == "auto" else "彩色色块"
@@ -235,20 +244,27 @@ class ImageScreen(ModalScreen):
         with Vertical(id="image-dialog"):
             yield Static(id="image-title")
             yield Static(id="image-status")
+            yield Static(id="image-save-status")
             with Vertical(id="image-stage"):
                 yield self.image_view
-            yield Static("← → 切换图片  ·  R 重试  ·  Esc / Enter 返回", id="image-hint")
+            hint = "← → 切换图片  ·  R 重试"
+            if self._save_callback is not None:
+                hint += "  ·  S 收藏"
+            yield Static(hint + "  ·  Esc / Enter 返回", id="image-hint")
 
     def on_mount(self) -> None:
         self.action_reload()
 
     def _clear_image(self) -> None:
-        self.image_view.image = None
+        if self.image_view.is_mounted:
+            self.image_view.image = None
         if self.preview is not None:
             self.preview.image.close()
             self.preview = None
 
     def action_reload(self) -> None:
+        if self._saving:
+            return
         attachment = self.attachments[self.index]
         self._clear_image()
         self.query_one("#image-title", Static).update(Text(
@@ -256,6 +272,7 @@ class ImageScreen(ModalScreen):
             + single_line(attachment.get("filename") or "图片")
         ))
         self.query_one("#image-status", Static).update("正在加载图片…")
+        self.query_one("#image-save-status", Static).update("")
         self._load_worker = self.run_worker(
             self._load(attachment["url"]), group="image-preview", exclusive=True,
         )
@@ -279,24 +296,222 @@ class ImageScreen(ModalScreen):
                 self.query_one("#image-status", Static).update(Text(safe_text(exc), style="red"))
 
     def action_previous(self) -> None:
-        if self.index > 0:
+        if not self._saving and self.index > 0:
             self.index -= 1
             self.action_reload()
 
     def action_next(self) -> None:
-        if self.index + 1 < len(self.attachments):
+        if not self._saving and self.index + 1 < len(self.attachments):
             self.index += 1
             self.action_reload()
+
+    def action_save(self) -> None:
+        if self._save_callback is None or self._saving:
+            return
+        self._saving = True
+        self.query_one("#image-save-status", Static).update("正在收藏…")
+        self._save_worker = self.run_worker(
+            self._saved(self._save_callback(self.index + 1)),
+            group="image-save",
+            exclusive=True,
+        )
+
+    async def _saved(self, operation: Awaitable[dict[str, Any]]) -> None:
+        try:
+            result = await operation
+            message = "该图片已在表情库中。" if result.get("duplicate") else "已收藏到全局表情库。"
+            if not self._preview_closed:
+                self.query_one("#image-save-status", Static).update(Text(message, style="green"))
+        except ConsoleError as exc:
+            if not self._preview_closed:
+                self.query_one("#image-save-status", Static).update(Text(safe_text(exc), style="red"))
+        finally:
+            self._saving = False
 
     def _stop(self) -> None:
         self._preview_closed = True
         if self._load_worker is not None:
             self._load_worker.cancel()
+        if self._save_worker is not None:
+            self._save_worker.cancel()
         self._clear_image()
 
     def action_close(self) -> None:
         self._stop()
         self.dismiss()
+
+    def on_unmount(self) -> None:
+        self._stop()
+
+
+class StickerItem(ListItem):
+    def __init__(self, sticker: dict[str, Any], index: int) -> None:
+        self.sticker = sticker
+        saved = single_line(sticker.get("saved_at", "")).replace("T", " ")[:16]
+        size = max(0, int(sticker.get("size", 0)))
+        label = Text(f"{index}. {sticker['id'][:10]}", style="bold")
+        label.append(f"  ·  {saved or '时间未知'}  ·  {size // 1024 or 1} KB", style="dim")
+        super().__init__(Label(label))
+
+
+class StickerPicker(ModalScreen[dict[str, Any] | None]):
+    BINDINGS = [Binding("escape", "cancel", "返回", show=False, priority=True)]
+    DEFAULT_CSS = """
+    StickerPicker { align: center middle; background: #000000 70%; }
+    #sticker-dialog { width: 90%; max-width: 100; height: 88%; padding: 1 2;
+                      border: round #7dd3c7; background: #161d26; }
+    #sticker-title { height: 1; color: #7dd3c7; text-style: bold; }
+    #stickers { height: 9; margin-top: 1; background: transparent; }
+    StickerItem { height: 1; padding: 0 1; }
+    StickerItem Label { height: 1; }
+    #sticker-stage { height: 1fr; align: center middle; overflow: hidden; }
+    #sticker-preview { width: auto; height: auto; max-width: 100%; max-height: 100%; }
+    #sticker-status { height: auto; max-height: 3; color: #a1adb9; }
+    #sticker-hint { height: 1; color: #8b949e; }
+    """
+
+    def __init__(
+        self,
+        stickers: list[dict[str, Any]],
+        client: ConsoleClient,
+        group_id: str,
+        *,
+        mode: str = "auto",
+    ) -> None:
+        super().__init__()
+        self.stickers = stickers
+        self.client = client
+        self.group_id = group_id
+        self.preview: PreviewImage | None = None
+        self._load_worker = None
+        self._send_worker = None
+        self._closed = False
+        self._sending = False
+        protocols = {image_renderables.TGPImage: "Kitty", image_renderables.SixelImage: "Sixel"}
+        self.renderer_name = protocols.get(image_renderables.Image, "彩色色块") if mode == "auto" else "彩色色块"
+        widget = HalfcellImage if self.renderer_name == "彩色色块" else AutoImage
+        self.image_view = widget(id="sticker-preview") if stickers else None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sticker-dialog"):
+            yield Static("全局表情库", id="sticker-title")
+            if self.stickers:
+                yield ListView(*(
+                    StickerItem(sticker, index)
+                    for index, sticker in enumerate(self.stickers, 1)
+                ), id="stickers")
+                with Vertical(id="sticker-stage"):
+                    assert self.image_view is not None
+                    yield self.image_view
+                yield Static(id="sticker-status")
+            else:
+                yield Static("表情库为空，可在收到的 PNG/JPEG 图片预览中按 S 收藏。", id="empty-stickers")
+            yield Static("↑↓ 选择  ·  Enter 发送  ·  Esc 返回", id="sticker-hint")
+
+    def on_mount(self) -> None:
+        if self.stickers:
+            listing = self.query_one("#stickers", ListView)
+            listing.index = 0
+            listing.focus()
+            self._preview(self.stickers[0])
+
+    def _clear_image(self) -> None:
+        if self.image_view is not None and self.image_view.is_mounted:
+            self.image_view.image = None
+        if self.preview is not None:
+            self.preview.image.close()
+            self.preview = None
+
+    def _preview(self, sticker: dict[str, Any]) -> None:
+        if self._sending:
+            return
+        self._clear_image()
+        self.query_one("#sticker-status", Static).update("正在加载预览…")
+        self._load_worker = self.run_worker(
+            self._load(sticker["id"]), group="sticker-preview", exclusive=True
+        )
+
+    async def _load(self, sticker_id: str) -> None:
+        try:
+            preview = decode_image(await self.client.sticker_image(sticker_id))
+            if self._closed:
+                preview.image.close()
+                return
+            self.preview = preview
+            assert self.image_view is not None
+            self.image_view.image = preview.image
+            self.query_one("#sticker-status", Static).update(
+                f"{preview.width} × {preview.height}  ·  {self.renderer_name}"
+            )
+        except ConsoleError as exc:
+            if not self._closed:
+                self.query_one("#sticker-status", Static).update(Text(safe_text(exc), style="red"))
+
+    @on(ListView.Highlighted, "#stickers")
+    def highlighted(self, event: ListView.Highlighted) -> None:
+        event.stop()
+        if isinstance(event.item, StickerItem):
+            self._preview(event.item.sticker)
+
+    @on(ListView.Selected, "#stickers")
+    def selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        if not self._sending and isinstance(event.item, StickerItem):
+            self._sending = True
+            self.query_one("#stickers", ListView).disabled = True
+            self.query_one("#sticker-status", Static).update("正在发送表情…")
+            self._send_worker = self.run_worker(self._send(event.item.sticker["id"]), group="sticker-send")
+
+    async def _send(self, sticker_id: str) -> None:
+        try:
+            result = await self.client.send_sticker(self.group_id, sticker_id)
+            if not self._closed:
+                self.dismiss(result)
+        except ConsoleError as exc:
+            if not self._closed:
+                if exc.code == "sticker_not_found":
+                    await self._refresh_after_deletion(exc)
+                else:
+                    self.query_one("#sticker-status", Static).update(
+                        Text(safe_text(exc), style="red")
+                    )
+                listing = self.query_one("#stickers", ListView)
+                listing.disabled = False
+                listing.focus()
+        finally:
+            self._sending = False
+
+    async def _refresh_after_deletion(self, error: ConsoleError) -> None:
+        status = self.query_one("#sticker-status", Static)
+        try:
+            stickers = await self.client.stickers()
+        except ConsoleError:
+            status.update(Text(f"{safe_text(error)} 列表刷新失败，请重新打开表情库。", style="red"))
+            return
+        self.stickers = stickers
+        listing = self.query_one("#stickers", ListView)
+        await listing.clear()
+        if stickers:
+            await listing.extend(
+                StickerItem(sticker, index)
+                for index, sticker in enumerate(stickers, 1)
+            )
+            listing.index = 0
+        self._clear_image()
+        status.update(Text(f"{safe_text(error)} 列表已刷新。", style="red"))
+
+    def action_cancel(self) -> None:
+        if self._sending:
+            return
+        self.dismiss(None)
+
+    def _stop(self) -> None:
+        self._closed = True
+        if self._load_worker is not None:
+            self._load_worker.cancel()
+        if self._send_worker is not None:
+            self._send_worker.cancel()
+        self._clear_image()
 
     def on_unmount(self) -> None:
         self._stop()
@@ -691,6 +906,25 @@ class FisoChatApp(App):
             self.action_groups()
         elif command == "/name":
             self.action_names()
+        elif command == "/stickers":
+            if not self.selected_group:
+                self.notice("请先选择一个已接收过消息的群。", error=True)
+                return
+            try:
+                stickers = await self.client.stickers()
+            except ConsoleError as exc:
+                self.notice(str(exc), error=True)
+                return
+            self._hide_names()
+            self.push_screen(
+                StickerPicker(
+                    stickers,
+                    self.client,
+                    self.selected_group,
+                    mode=self.image_mode,
+                ),
+                self._sticker_closed,
+            )
         elif command == "/image":
             parts = argument.split()
             if len(parts) > 2 or any(not part.isdecimal() or len(part) > 19 for part in parts):
@@ -717,7 +951,25 @@ class FisoChatApp(App):
             if not 0 <= index < len(attachments):
                 self.notice(f"图片序号应在 1 至 {len(attachments)} 之间。", error=True)
                 return
-            self.push_screen(ImageScreen(record, attachments, index=index, mode=self.image_mode), self._image_closed)
+            save_callback = None
+            if not record.get("is_bot") and not record.get("recalled") and self.selected_group:
+                group_id = self.selected_group
+
+                async def save_callback(attachment_index: int) -> dict[str, Any]:
+                    return await self.client.save_sticker(
+                        group_id, record["record_id"], attachment_index
+                    )
+
+            self.push_screen(
+                ImageScreen(
+                    record,
+                    attachments,
+                    index=index,
+                    mode=self.image_mode,
+                    save_callback=save_callback,
+                ),
+                self._image_closed,
+            )
         elif command == "/refresh":
             self.action_refresh()
         elif command == "/older":
@@ -761,7 +1013,7 @@ class FisoChatApp(App):
                     self.notice("当前没有可翻页的消息。")
                     return
                 if len(self.messages) >= 2000:
-                    self.notice("当前已显示 2000 条记录，可在网页继续查看。")
+                    self.notice("当前已显示 2000 条记录。")
                     return
                 batch = await self.client.messages(self.selected_group, before=min(self.messages))
                 self._merge_messages(batch, older=True)
@@ -772,6 +1024,11 @@ class FisoChatApp(App):
     def action_groups(self) -> None:
         if isinstance(self.screen, ImageScreen):
             self.screen.action_close()
+        if isinstance(self.screen, StickerPicker):
+            self.screen.action_cancel()
+            if isinstance(self.screen, StickerPicker):
+                self.notice("正在发送表情，结果确认前不能切换群聊。")
+                return
         if self._sending:
             self.notice("正在发送，完成后可切换群聊。")
             return
@@ -787,6 +1044,16 @@ class FisoChatApp(App):
         self.query_one("#input", Input).focus()
 
     def _image_closed(self, _result: None) -> None:
+        self.query_one("#input", Input).focus()
+
+    def _sticker_closed(self, result: dict[str, Any] | None) -> None:
+        if result is not None:
+            self.notice(
+                "表情已发送。"
+                if result.get("recorded")
+                else "QQ 已确认发送，但记录未保存，请勿重复发送。"
+            )
+            self.action_refresh()
         self.query_one("#input", Input).focus()
 
     def action_names(self) -> None:

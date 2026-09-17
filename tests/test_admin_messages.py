@@ -63,7 +63,10 @@ class AdminMessageHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_valid_request_uses_context_and_console_origin(self):
         repository = FakeRepository(self.context())
         sender = FakeSender()
-        handler = AdminMessageHandler(repository, sender, token="secret")
+        handler = AdminMessageHandler(
+            repository, sender, token="secret",
+            sticker_store=object(), sticker_signer=object(),
+        )
         response = await handler.send_group_message(
             FakeRequest(
                 {
@@ -83,7 +86,8 @@ class AdminMessageHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_auth_and_loopback_are_required(self):
         handler = AdminMessageHandler(
-            FakeRepository(self.context()), FakeSender(), token="secret"
+            FakeRepository(self.context()), FakeSender(), token="secret",
+            sticker_store=object(), sticker_signer=object(),
         )
         unauthorized = await handler.send_group_message(
             FakeRequest({}, token="wrong")
@@ -97,7 +101,10 @@ class AdminMessageHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_reply_id_sends_a_proactive_group_message(self):
         repository = FakeRepository(None)
         sender = FakeSender()
-        handler = AdminMessageHandler(repository, sender, token="secret")
+        handler = AdminMessageHandler(
+            repository, sender, token="secret",
+            sticker_store=object(), sticker_signer=object(),
+        )
 
         response = await handler.send_group_message(
             FakeRequest({"group_openid": "group-1", "content": " hello "})
@@ -114,7 +121,8 @@ class AdminMessageHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_context_fails_without_sending(self):
         sender = FakeSender()
         handler = AdminMessageHandler(
-            FakeRepository(None), sender, token="secret"
+            FakeRepository(None), sender, token="secret",
+            sticker_store=object(), sticker_signer=object(),
         )
         response = await handler.send_group_message(
             FakeRequest(

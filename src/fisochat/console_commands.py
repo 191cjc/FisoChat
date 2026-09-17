@@ -30,6 +30,7 @@ COMMANDS = (
     Command("/name", "临时展开完整昵称"),
     Command("/groups", "临时切换群聊"),
     Command("/image", "预览图片，省略参数查看最近一张", "[记录号 [图片序号]]", "/image 或 /image 31 2"),
+    Command("/stickers", "浏览并发送已收藏表情"),
     Command("/use", "切换到指定群", "群序号或群ID", "/use 2"),
     Command("/older", "加载更早的消息"),
     Command("/refresh", "立即同步新消息"),

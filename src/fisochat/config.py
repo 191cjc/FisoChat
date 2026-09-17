@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 ALIASES = {
     "FISOCHAT_DB": "AIQQ_GROUP_MESSAGE_DB",
-    "FISOCHAT_VIEW_USERNAME": "AIQQ_GROUP_MESSAGE_VIEW_USERNAME",
-    "FISOCHAT_VIEW_PASSWORD": "AIQQ_GROUP_MESSAGE_VIEW_PASSWORD",
     "FISOCHAT_WEB_HOST": "AIQQ_HEALTH_HOST",
     "FISOCHAT_WEB_PORT": "AIQQ_HEALTH_PORT",
     "FISOCHAT_ADMIN_TOKEN": "AIQQ_ADMIN_TOKEN",
@@ -62,9 +62,10 @@ class AppConfig:
     app_id: str
     secret: str = field(repr=False)
     database_path: Path
-    view_username: str
-    view_password: str = field(repr=False)
     admin_token: str = field(repr=False)
+    sticker_directory: Path
+    sticker_public_base_url: str
+    sticker_signing_secret: str = field(repr=False)
     web_host: str = "127.0.0.1"
     web_port: int = 8789
     http_timeout_seconds: int = 30
@@ -72,19 +73,20 @@ class AppConfig:
     log_level: str = "INFO"
 
     @classmethod
-    def from_env(
-        cls, values: Mapping[str, str] | None = None, *, web_only: bool = False
-    ) -> AppConfig:
+    def from_env(cls, values: Mapping[str, str] | None = None) -> AppConfig:
         values = os.environ if values is None else values
-        required = ["FISOCHAT_VIEW_USERNAME", "FISOCHAT_VIEW_PASSWORD"]
-        if not web_only:
-            required += ["QQ_BOT_APPID", "QQ_BOT_SECRET"]
+        required = [
+            "QQ_BOT_APPID",
+            "QQ_BOT_SECRET",
+            "FISOCHAT_ADMIN_TOKEN",
+            "FISOCHAT_STICKER_PUBLIC_BASE_URL",
+            "FISOCHAT_STICKER_SIGNING_SECRET",
+        ]
+        admin_token = load_admin_token(values)
         for name in required:
-            if not value(values, name, "admin" if name == "FISOCHAT_VIEW_USERNAME" else ""):
+            configured = admin_token if name == "FISOCHAT_ADMIN_TOKEN" else value(values, name)
+            if not configured:
                 raise ValueError(f"请配置 {name}。")
-        username = value(values, "FISOCHAT_VIEW_USERNAME", "admin")
-        if ":" in username:
-            raise ValueError("FISOCHAT_VIEW_USERNAME 不能包含冒号。")
         database_path = value(values, "FISOCHAT_DB", "data/group_messages.db")
         if not database_path:
             raise ValueError("FISOCHAT_DB 不能为空。")
@@ -94,13 +96,23 @@ class AppConfig:
         level = value(values, "FISOCHAT_LOG_LEVEL", "INFO").upper()
         if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("FISOCHAT_LOG_LEVEL 无效。")
+        sticker_directory = value(values, "FISOCHAT_STICKER_DIR", "data/stickers")
+        if not sticker_directory:
+            raise ValueError("FISOCHAT_STICKER_DIR 不能为空。")
+        public_base_url = _public_base_url(
+            value(values, "FISOCHAT_STICKER_PUBLIC_BASE_URL")
+        )
+        signing_secret = value(values, "FISOCHAT_STICKER_SIGNING_SECRET")
+        if len(signing_secret.encode("utf-8")) < 32:
+            raise ValueError("FISOCHAT_STICKER_SIGNING_SECRET 至少需要 32 字节。")
         return cls(
             app_id=value(values, "QQ_BOT_APPID"),
             secret=value(values, "QQ_BOT_SECRET"),
             database_path=Path(database_path).expanduser(),
-            view_username=username,
-            view_password=value(values, "FISOCHAT_VIEW_PASSWORD"),
-            admin_token=load_admin_token(values),
+            admin_token=admin_token,
+            sticker_directory=Path(sticker_directory).expanduser(),
+            sticker_public_base_url=public_base_url,
+            sticker_signing_secret=signing_secret,
             web_host=host,
             web_port=integer(values, "FISOCHAT_WEB_PORT", 8789, 1, 65535),
             http_timeout_seconds=integer(values, "FISOCHAT_HTTP_TIMEOUT_SECONDS", 30, 5, 120),
@@ -109,3 +121,36 @@ class AppConfig:
             ),
             log_level=level,
         )
+
+
+def _public_base_url(raw: str) -> str:
+    try:
+        parsed = urlsplit(raw)
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or hostname == "localhost"
+            or hostname.endswith(".localhost")
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or (parsed.port is not None and not 1 <= parsed.port <= 65535)
+            or any(ord(char) < 33 or ord(char) == 127 for char in raw)
+        ):
+            raise ValueError
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+                address = address.ipv4_mapped
+            if not address.is_global or address.is_multicast:
+                raise ValueError
+    except ValueError:
+        raise ValueError(
+            "FISOCHAT_STICKER_PUBLIC_BASE_URL 必须是不含凭据、查询或片段的 HTTPS 地址。"
+        ) from None
+    return raw.rstrip("/")
