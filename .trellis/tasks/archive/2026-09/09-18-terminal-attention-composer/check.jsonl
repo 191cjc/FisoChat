@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/09-18-multiline-terminal-composer/research/textual-composer.md","reason":"Verify multiline paste/send behavior and preservation of all prior composer contracts."}
+{"file":".trellis/tasks/09-18-terminal-mention-notification/research/current-mention-flow.md","reason":"Verify cross-group popup behavior, cursor safety, and the absence of QQ sends."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Run a final end-to-end review across both child data flows and their shared terminal state."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check that combined changes do not duplicate payload parsing, index conversion, or state management."}

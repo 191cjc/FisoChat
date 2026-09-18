@@ -1,0 +1,29 @@
+{
+  "id": "terminal-attention-composer",
+  "name": "terminal-attention-composer",
+  "title": "Terminal attention and composer improvements",
+  "description": "Deliver cross-group bot-mention popups and a multiline terminal composer with preserved paste formatting.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "chenjiachun",
+  "assignee": "chenjiachun",
+  "createdAt": "2026-09-18",
+  "completedAt": "2026-09-18",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-18-terminal-mention-notification",
+    "09-18-multiline-terminal-composer"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

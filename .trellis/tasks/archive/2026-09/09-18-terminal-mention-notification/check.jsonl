@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-18-terminal-mention-notification/research/current-mention-flow.md","reason":"Verify classification, cursor progression, historical suppression, cross-group coverage, and no-send behavior against repository evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review the complete gateway-record to terminal-popup flow and all boundary projections."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated payload parsing, divergent cursor ownership, and redundant projection logic."}

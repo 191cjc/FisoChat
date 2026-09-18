@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-18-multiline-terminal-composer/research/textual-composer.md","reason":"Installed Textual behavior, the paste root cause, location/index mapping, and composer compatibility requirements."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Multiline text and mention offsets must survive editor, terminal state, HTTP payload, and QQ sender boundaries unchanged."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing command, mention, draft, and send logic while centralizing TextArea offset conversion and guarded edits."}
