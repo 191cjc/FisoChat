@@ -72,3 +72,36 @@ Accepted production-shaped opaque QQ message IDs, enabled native replies for rec
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Multiline composer and terminal mention alerts
+<!-- trellis-session: v=2 fp=32bd5e1438e1c5be -->
+
+**Date**: 2026-09-18
+**Task**: Multiline composer and terminal mention alerts
+**Branch**: `main`
+
+### Summary
+
+Added a multiline Textual composer that preserves pasted line breaks and a cross-group, terminal-only popup feed for messages that mention the current bot; verified state isolation, no outbound QQ side effects, and restarted the connected service.
+
+### Main Changes
+
+- Preserved CRLF/CR-normalized multiline paste, Enter send, Shift+Enter newline, commands, mentions, drafts, reply state, copy, and the 2,000-character atomic limit.
+- Added an authenticated global record cursor feed and eight-second Textual popups for current-bot mentions across all groups without bells or automatic replies.
+- Documented executable composer and mention-alert contracts and archived the parent and child tasks.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `58df9e2` | feat: add multiline composer and mention alerts |
+
+### Testing
+
+- [OK] 162 unittest cases passed; compileall, uv lock --check, git diff --check, and uv build passed.
+- [OK] Restarted fisochat.service; /health reported database open and QQ gateway connected.
+
+### Status
+
+[OK] **Completed**
