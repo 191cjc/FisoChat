@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
-- **Last Active**: 2026-09-17
+- **Total Sessions**: 3
+- **Last Active**: 2026-09-18
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~52 | Active |
+| `journal-1.md` | ~74 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-09-18 | Fix QQ reply IDs and verify JPEG stickers | `4feac6a` | `main` |
 | 2 | 2026-09-17 | Terminal sticker library and browser retirement | `cca1777` | `main` |
 | 1 | 2026-09-17 | Harden message storage and terminal history | `660f6fe`, `70bd709` | `main` |
 <!-- @@@/auto:session-history -->

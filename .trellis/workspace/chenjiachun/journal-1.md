@@ -50,3 +50,25 @@ Added manual PNG/JPEG sticker collection, global content-addressed storage, sign
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: Fix QQ reply IDs and verify JPEG stickers
+<!-- trellis-session: v=2 fp=42928224e9c3c228 -->
+
+**Date**: 2026-09-18
+**Task**: Fix QQ reply IDs and verify JPEG stickers
+**Branch**: `main`
+
+### Summary
+
+Accepted production-shaped opaque QQ message IDs, enabled native replies for recent ordinary group messages while preserving safety limits, added cross-layer regression coverage and a reply contract spec, verified JPEG storage/public retrieval, and restarted the connected service.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4feac6a` | fix: accept opaque QQ reply message IDs |
+
+### Status
+
+[OK] **Completed**
