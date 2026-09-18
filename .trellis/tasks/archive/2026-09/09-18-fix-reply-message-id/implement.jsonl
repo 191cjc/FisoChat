@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-18-fix-reply-message-id/research/reply-id-validation.md","reason":"Production evidence for the real QQ ID alphabet, the validator root cause, reply-context constraints, and existing JPEG behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The fix must preserve the record-id to message-id flow across terminal, loopback API, repository lookup, and QQ sender."}
+{"file":".trellis/spec/backend/sticker-library.md","reason":"Preserve and verify the established PNG/JPEG sticker format contract while fixing replies."}

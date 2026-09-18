@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-18-fix-reply-message-id/research/reply-id-validation.md","reason":"Check the implementation against observed production IDs, exact forwarding, reply-context boundaries, and JPEG evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review reply selection, API validation, repository context resolution, sender inputs, and errors end to end."}
+{"file":".trellis/spec/backend/sticker-library.md","reason":"Ensure JPEG support remains intact and no unrelated sticker contract regresses."}
