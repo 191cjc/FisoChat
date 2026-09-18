@@ -324,6 +324,26 @@ class GroupMessageRepository:
                 rows = await cursor.fetchall()
         return tuple(_row_to_message(row) for row in rows)
 
+    async def scan_after(
+        self, after_record_id: int, *, limit: int = 100
+    ) -> tuple[StoredGroupMessage, ...]:
+        """Scan records from every group using the global primary-key cursor."""
+        await self.initialize()
+        safe_after = max(0, int(after_record_id))
+        safe_limit = max(1, min(int(limit), 100))
+        async with self._database.read() as connection:
+            async with connection.execute(
+                """
+                SELECT * FROM group_messages
+                WHERE record_id > ?
+                ORDER BY record_id ASC
+                LIMIT ?
+                """,
+                (safe_after, safe_limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return tuple(_row_to_message(row) for row in rows)
+
     async def groups(
         self, *, limit: int = 200
     ) -> tuple[GroupMessageSummary, ...]:

@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock, patch
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from PIL import Image
-from textual.widgets import Input, Static
+from textual.widgets import Static
 from textual_image.widget import HalfcellImage
 
 from fisochat.console import FisoChatApp, GroupPicker, ImageScreen, message_text
 from fisochat.console_client import ConsoleError
+from fisochat.console_commands import CommandInput
 from fisochat.console_images import (
     PublicImageResolver, decode_image, fetch_image, image_attachments,
 )
@@ -178,7 +179,7 @@ class ImageScreenTests(unittest.IsolatedAsyncioTestCase):
             async with app.run_test(size=(100, 36)) as pilot:
                 await pilot.pause()
                 fetch.assert_not_called()
-                app.query_one(Input).value = "保留草稿"
+                app.query_one(CommandInput).value = "保留草稿"
                 await app.command("/reply 80")
                 await app.command("/name")
                 await app.command("/image 80")
@@ -189,7 +190,7 @@ class ImageScreenTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(screen.image_view.image)
                 self.assertEqual(screen.index, 0)
                 await pilot.click("#image-title")
-                self.assertIsNot(app.focused, app.query_one(Input))
+                self.assertIsNot(app.focused, app.query_one(CommandInput))
                 await pilot.press("right")
                 await pilot.pause()
                 self.assertEqual(screen.index, 1)
@@ -204,8 +205,8 @@ class ImageScreenTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("escape")
                 self.assertNotIsInstance(app.screen, ImageScreen)
                 self.assertIsNone(screen.preview)
-                self.assertEqual(app.query_one(Input).value, "保留草稿")
-                self.assertTrue(app.query_one(Input).has_focus)
+                self.assertEqual(app.query_one(CommandInput).value, "保留草稿")
+                self.assertTrue(app.query_one(CommandInput).has_focus)
                 self.assertEqual(app.reply_to["record_id"], 80)
                 self.assertTrue(app.show_names)
                 self.assertEqual(app.selected_group, "group-a")
@@ -221,12 +222,12 @@ class ImageScreenTests(unittest.IsolatedAsyncioTestCase):
                     await app.command(command)
                     self.assertNotIsInstance(app.screen, ImageScreen)
                 fetch.assert_not_called()
-                app.query_one(Input).value = "/image 80 2"
+                app.query_one(CommandInput).value = "/image 80 2"
                 await pilot.press("enter")
                 await pilot.pause()
                 self.assertEqual(app.screen.index, 1)
                 await pilot.press("enter")
-                self.assertTrue(app.query_one(Input).has_focus)
+                self.assertTrue(app.query_one(CommandInput).has_focus)
                 self.assertEqual(app.client.sent, [])
 
     async def test_bare_image_command_opens_last_image_in_current_group(self):
@@ -271,7 +272,7 @@ class ImageScreenTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("down", "enter")
                 await pilot.pause()
                 self.assertEqual(app.selected_group, "group-b")
-                self.assertTrue(app.query_one(Input).has_focus)
+                self.assertTrue(app.query_one(CommandInput).has_focus)
 
     async def test_escape_cancels_download_and_keeps_chat_usable(self):
         started, canceled = asyncio.Event(), asyncio.Event()

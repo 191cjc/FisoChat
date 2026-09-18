@@ -13,10 +13,11 @@ from unittest.mock import AsyncMock
 from aiohttp import web
 from multidict import MultiDict
 from PIL import Image
-from textual.widgets import Input, ListView, Static
+from textual.widgets import ListView, Static
 
 from fisochat.console import FisoChatApp, ImageScreen, StickerPicker
 from fisochat.console_client import ConsoleError
+from fisochat.console_commands import CommandInput
 from fisochat.database.models import StoredGroupMessage
 from fisochat.interfaces.web.admin_messages import AdminMessageHandler
 from fisochat.logic.models import BotSentGroupMessage
@@ -349,7 +350,7 @@ class StickerConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(client, image_mode="blocks")
         async with app.run_test(size=(90, 30)) as pilot:
             await pilot.pause()
-            composer = app.query_one(Input)
+            composer = app.query_one(CommandInput)
             composer.value = "保留草稿"
             await app.command("/image 80")
             self.assertIsInstance(app.screen, ImageScreen)

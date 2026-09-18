@@ -183,6 +183,37 @@ class MentionConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.client.sent[0][1].startswith("/ @"))
             self.assertEqual(app.client.mention_requests[0][0]["start"], 2)
 
+    async def test_mention_completion_after_line_break_uses_flat_offsets(self):
+        client = MentionClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "第一行\n@"
+            composer.cursor_position = len(composer.value)
+
+            await pilot.press("tab", "h", "i", "enter")
+            await app.workers.wait_for_complete()
+
+            sent = client.sent[0][1]
+            mention = client.mention_requests[0][0]
+            self.assertEqual(mention["start"], len("第一行\n"))
+            self.assertEqual(sent[mention["start"]:mention["end"]], "@张三…·2")
+
+    async def test_over_limit_mention_completion_is_rejected_as_one_edit(self):
+        app = FisoChatApp(MentionClient())
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "x" * 1999 + "@"
+            composer.cursor_position = len(composer.value)
+            original = composer.value
+
+            await pilot.press("tab")
+
+            self.assertEqual(composer.value, original)
+            self.assertEqual(composer.mentions, [])
+
 
 if __name__ == "__main__":
     unittest.main()

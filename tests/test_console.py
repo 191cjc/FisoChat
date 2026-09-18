@@ -1,11 +1,11 @@
 import asyncio
 import unittest
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from rich.text import Text
 from textual import events
-from textual.widgets import Input, ListView, RichLog
+from textual.widgets import ListView, RichLog
 
 from fisochat.cli import main as cli_main
 from fisochat.console import (
@@ -17,6 +17,8 @@ from fisochat.console import (
     safe_text,
 )
 from fisochat.console_client import ConsoleClient, ConsoleError
+from fisochat.console_commands import CommandInput
+from fisochat.console_mentions import MentionMember, MentionSpan
 
 
 def message(record_id, content="普通消息", *, bot=False):
@@ -35,6 +37,8 @@ class FakeClient:
         self.failure = False
         self.send_gate = None
         self.online = True
+        self.alerts = {}
+        self.alert_calls = []
 
     async def open(self):
         pass
@@ -61,6 +65,29 @@ class FakeClient:
             return deepcopy([record for record in records if record["record_id"] > after][:100])
         return deepcopy(records[-50:])
 
+    async def mention_alerts(self, after, *, limit=100):
+        if not self.online:
+            raise ConsoleError("无法连接后台")
+        self.alert_calls.append((after, limit))
+        records = sorted(
+            (
+                record
+                for group_records in self.records.values()
+                for record in group_records
+                if record["record_id"] > after
+            ),
+            key=lambda record: record["record_id"],
+        )[:limit]
+        return {
+            "mentions": [
+                deepcopy(self.alerts[record["record_id"]])
+                for record in records
+                if record["record_id"] in self.alerts
+            ],
+            "next_after": records[-1]["record_id"] if records else after,
+            "has_more": len(records) == limit,
+        }
+
     async def send(self, group, content, *, reply_to=None, mentions=None):
         self.sent.append((group, content, reply_to))
         if self.send_gate:
@@ -73,12 +100,106 @@ class FakeClient:
 
 
 class ConsoleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_multiline_paste_normalizes_line_endings_and_sends_once(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+
+            app.post_message(events.Paste("first\r\nsecond\rthird"))
+            await pilot.pause()
+
+            self.assertEqual(composer.value, "first\nsecond\nthird")
+            self.assertEqual(client.sent, [])
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            self.assertEqual(client.sent, [("group-a", "first\nsecond\nthird", None)])
+
+    async def test_clipboard_paste_normalizes_line_endings(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            app.copy_to_clipboard("first\r\nsecond\rthird")
+
+            await pilot.press("ctrl+v")
+
+            self.assertEqual(composer.value, "first\nsecond\nthird")
+            self.assertEqual(app.client.sent, [])
+
+    async def test_shift_enter_inserts_newline_and_composer_grows_to_five_rows(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            self.assertEqual(composer.size.height, 1)
+
+            await pilot.press("a", "shift+enter", "b")
+            self.assertEqual(composer.value, "a\nb")
+            self.assertEqual(client.sent, [])
+            composer.value = "1\n2\n3\n4\n5\n6\n7"
+            await pilot.pause()
+            self.assertEqual(composer.size.height, 5)
+            self.assertGreater(composer.max_scroll_y, 0)
+
+    async def test_arrow_keys_move_between_lines_without_completion_candidates(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "ab\ncd"
+
+            await pilot.press("up")
+            self.assertEqual(composer.cursor_location, (0, 2))
+            await pilot.press("down")
+            self.assertEqual(composer.cursor_location, (1, 2))
+
+    async def test_over_limit_keyboard_and_paste_edits_are_rejected_atomically(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "x" * 1999
+
+            await pilot.press("a", "b")
+            self.assertEqual(composer.value, "x" * 1999 + "a")
+            app.post_message(events.Paste("y\r\nz"))
+            await pilot.pause()
+            self.assertEqual(composer.value, "x" * 1999 + "a")
+            self.assertEqual(app.client.sent, [])
+
+    async def test_read_only_and_disabled_composer_reject_edits_and_submission(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "keep"
+            app.copy_to_clipboard(" pasted")
+
+            composer.read_only = True
+            composer.action_paste()
+            composer.insert_mention(MentionMember(1, "member", "name", "alias"))
+            await composer.action_submit()
+            self.assertEqual(composer.value, "keep")
+            self.assertEqual(composer.mentions, [])
+            self.assertEqual(client.sent, [])
+
+            composer.read_only = False
+            composer.disabled = True
+            composer.action_paste()
+            await composer.action_submit()
+            self.assertEqual(composer.value, "keep")
+            self.assertEqual(client.sent, [])
+
     async def test_dragging_chat_history_copies_without_changing_the_draft(self):
         client = FakeClient()
         app = FisoChatApp(client)
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            composer = app.query_one(Input)
+            composer = app.query_one(CommandInput)
             log = app.query_one(SelectableRichLog)
             messages = deepcopy(app.messages)
             composer.value = "保留草稿"
@@ -183,7 +304,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(client)
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            composer = app.query_one(Input)
+            composer = app.query_one(CommandInput)
             log = app.query_one(RichLog)
             log.scroll_home(animate=False)
             await pilot.pause()
@@ -203,7 +324,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(FakeClient())
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            composer = app.query_one(Input)
+            composer = app.query_one(CommandInput)
             composer.value = "abcdef"
             composer.cursor_position = 6
             await pilot.click("#input", offset=(2, 0))
@@ -221,7 +342,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(FakeClient())
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            composer = app.query_one(Input)
+            composer = app.query_one(CommandInput)
             composer.value = "abcd"
             composer.cursor_position = 2
             app.screen.set_focus(None)
@@ -266,7 +387,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.author_alias(first), "张三…")
             self.assertEqual(app.author_alias(second), "张三…·2")
             self.assertNotIn("张三丰", app.render_message(first).plain)
-            app.query_one(Input).value = "/name"
+            app.query_one(CommandInput).value = "/name"
             await pilot.press("enter")
             self.assertTrue(app.show_names)
             self.assertIn("张三丰〔张三…〕", app.render_message(first).plain)
@@ -274,11 +395,11 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await app._older()
             self.assertTrue(app.show_names)
             self.assertIn("张三丰", app.render_message(app.messages[1]).plain)
-            app.query_one(Input).value = "保留输入内容"
+            app.query_one(CommandInput).value = "保留输入内容"
             await pilot.press("escape")
             self.assertFalse(app.show_names)
             self.assertNotIn("张三丰", app.render_message(first).plain)
-            self.assertEqual(app.query_one(Input).value, "保留输入内容")
+            self.assertEqual(app.query_one(CommandInput).value, "保留输入内容")
             self.assertEqual(client.sent, [])
             await app.command("/name")
             await app.command("/name")
@@ -308,7 +429,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(client)
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            app.query_one(Input).value = "/groups"
+            app.query_one(CommandInput).value = "/groups"
             await pilot.press("enter")
             self.assertIsInstance(app.screen, GroupPicker)
             self.assertEqual(app.screen.query_one(ListView).index, 0)
@@ -318,20 +439,20 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIsInstance(app.screen, GroupPicker)
             self.assertEqual(app.selected_group, "group-b")
             self.assertEqual(len(app.query(ListView)), 0)
-            self.assertTrue(app.query_one(Input).has_focus)
+            self.assertTrue(app.query_one(CommandInput).has_focus)
             self.assertEqual(client.sent, [])
 
     async def test_canceling_group_picker_keeps_group_and_unsent_draft(self):
         app = FisoChatApp(FakeClient())
         async with app.run_test(size=(70, 24)) as pilot:
             await pilot.pause()
-            app.query_one(Input).value = "当前群的草稿"
+            app.query_one(CommandInput).value = "当前群的草稿"
             await pilot.press("ctrl+g")
             self.assertIsInstance(app.screen, GroupPicker)
             await pilot.press("down", "escape")
             self.assertEqual(app.selected_group, "group-a")
-            self.assertEqual(app.query_one(Input).value, "当前群的草稿")
-            self.assertTrue(app.query_one(Input).has_focus)
+            self.assertEqual(app.query_one(CommandInput).value, "当前群的草稿")
+            self.assertTrue(app.query_one(CommandInput).has_focus)
             await pilot.press("ctrl+g")
             await pilot.press("ctrl+g")
             self.assertNotIsInstance(app.screen, GroupPicker)
@@ -345,7 +466,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await app.command("/groups")
             self.assertIsInstance(app.screen, GroupPicker)
             await pilot.press("escape")
-            self.assertTrue(app.query_one(Input).has_focus)
+            self.assertTrue(app.query_one(CommandInput).has_focus)
             self.assertIsNone(app.selected_group)
 
     def test_message_is_one_logical_line_with_short_author_and_literal_content(self):
@@ -367,12 +488,12 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await app.workers.wait_for_complete()
             self.assertEqual(app.selected_group, "group-a")
             self.assertEqual(len(app.messages), 50)
-            app.query_one(Input).value = "未发送草稿"
+            app.query_one(CommandInput).value = "未发送\n草稿"
             await app.command("/use 2")
             self.assertEqual(app.selected_group, "group-b")
-            self.assertEqual(app.query_one(Input).value, "")
+            self.assertEqual(app.query_one(CommandInput).value, "")
             await app.command("/use 1")
-            self.assertEqual(app.query_one(Input).value, "未发送草稿")
+            self.assertEqual(app.query_one(CommandInput).value, "未发送\n草稿")
             await app._older()
             self.assertEqual(len(app.messages), 80)
             self.assertEqual(min(app.messages), 1)
@@ -385,18 +506,18 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         app = FisoChatApp(client)
         async with app.run_test(size=(110, 34)) as pilot:
             await pilot.pause()
-            app.query_one(Input).value = "终端发送"
+            app.query_one(CommandInput).value = "终端发送"
             await pilot.press("enter")
             await pilot.pause()
-            self.assertTrue(app.query_one(Input).disabled)
+            self.assertTrue(app.query_one(CommandInput).disabled)
             await pilot.click("#messages")
             await pilot.press("enter")
             self.assertEqual(len(client.sent), 1)
             client.send_gate.set()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            self.assertFalse(app.query_one(Input).disabled)
-            self.assertEqual(app.query_one(Input).value, "")
+            self.assertFalse(app.query_one(CommandInput).disabled)
+            self.assertEqual(app.query_one(CommandInput).value, "")
             self.assertEqual(client.sent[0], ("group-a", "终端发送", None))
             self.assertIn("终端发送", [record["content"] for record in app.messages.values()])
 
@@ -407,12 +528,12 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
             await app.command("/reply 80")
-            app.query_one(Input).value = "回复正文"
+            app.query_one(CommandInput).value = "回复\n正文"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
-            self.assertEqual(app.query_one(Input).value, "回复正文")
+            self.assertEqual(app.query_one(CommandInput).value, "回复\n正文")
             self.assertEqual(app.reply_to["record_id"], 80)
-            self.assertEqual(client.sent, [("group-a", "回复正文", "message-80")])
+            self.assertEqual(client.sent, [("group-a", "回复\n正文", "message-80")])
             await app.command("/cancel")
             self.assertIsNone(app.reply_to)
 
@@ -433,6 +554,136 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await app._refresh()
             self.assertEqual(len(app.messages), 273)
 
+    async def test_cross_group_mention_popup_is_live_only_and_preserves_state(self):
+        client = FakeClient()
+        client.alerts[81] = {
+            "record_id": 81,
+            "group_openid": "group-b",
+            "username": "历史用户",
+            "content": "历史 @ 消息",
+            "sent_at": "2026-09-16T12:00:00+08:00",
+        }
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(client.alert_calls, [])
+            self.assertEqual(list(app._notifications), [])
+            await app._older()
+            await app.select_group("group-b")
+            await app.select_group("group-a")
+            self.assertEqual(client.alert_calls, [])
+            self.assertEqual(list(app._notifications), [])
+
+            composer = app.query_one(CommandInput)
+            member = MentionMember(80, "member-80", "小明", "小明")
+            composer.value = "@小明\n保留草稿"
+            composer.restore_mentions([MentionSpan(0, 3, member)])
+            composer.selection = type(composer.selection)((0, 1), (1, 2))
+            selection = composer.selection
+            selected_text = composer.selected_text
+            app.reply_to = app.messages[80]
+            log = app.query_one(SelectableRichLog)
+            log.scroll_to(y=4, animate=False)
+            composer.focus()
+            await pilot.pause()
+            scroll_y = log.scroll_y
+
+            client.records["group-b"].append(message(82, "后台群的新消息"))
+            client.alerts[82] = {
+                "record_id": 82,
+                "group_openid": "group-b\n伪造第二行" + "g" * 80,
+                "username": "提醒者\x1b[31m" + "n" * 40,
+                "content": "请处理\n第二行\u202e" + "x" * 220,
+                "sent_at": "2026-09-16T12:01:00+08:00",
+            }
+            with patch.object(app, "bell") as bell:
+                await app._refresh()
+                await pilot.pause()
+                bell.assert_not_called()
+
+            notifications = list(app._notifications)
+            self.assertEqual(len(notifications), 1)
+            notification = notifications[0]
+            self.assertEqual(notification.title, "群聊 @ 提醒")
+            self.assertEqual(notification.severity, "information")
+            self.assertEqual(notification.timeout, 8)
+            self.assertFalse(notification.markup)
+            self.assertIn("group-b ↵ 伪造第二行", notification.message)
+            self.assertIn("#82", notification.message)
+            self.assertNotIn("\n", notification.message)
+            self.assertNotIn("\x1b", notification.message)
+            self.assertNotIn("\u202e", notification.message)
+
+            self.assertEqual(app.selected_group, "group-a")
+            self.assertEqual(composer.value, "@小明\n保留草稿")
+            self.assertEqual(composer.selection, selection)
+            self.assertEqual(composer.selected_text, selected_text)
+            self.assertEqual(composer.mentions, [MentionSpan(0, 3, member)])
+            self.assertEqual(app.reply_to["record_id"], 80)
+            self.assertTrue(composer.has_focus)
+            self.assertEqual(log.scroll_y, scroll_y)
+            self.assertEqual(client.sent, [])
+
+            live_alerts = client.mention_alerts
+            client.mention_alerts = AsyncMock(return_value={
+                "mentions": [deepcopy(client.alerts[82])],
+                "next_after": 82,
+                "has_more": False,
+            })
+            await app._refresh()
+            await pilot.pause()
+            self.assertEqual(len(list(app._notifications)), 1)
+            client.mention_alerts = live_alerts
+
+            client.records["group-b"].append(message(83, "断线时的新消息"))
+            client.alerts[83] = {
+                "record_id": 83,
+                "group_openid": "group-b",
+                "username": "恢复用户",
+                "content": "断线恢复后提醒",
+                "sent_at": "2026-09-16T12:02:00+08:00",
+            }
+            client.online = False
+            await app._refresh()
+            self.assertEqual(app._mention_cursor, 82)
+            client.online = True
+            await app._refresh()
+            await pilot.pause()
+            self.assertEqual(app._mention_cursor, 83)
+            self.assertEqual(len(list(app._notifications)), 2)
+            self.assertEqual(client.sent, [])
+
+    async def test_invalid_mention_projection_does_not_advance_cursor(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._mention_cursor, 81)
+            invalid_pages = (
+                [],
+                {
+                    "mentions": [{
+                        "record_id": "82",
+                        "group_openid": "group-b",
+                        "username": "member",
+                        "content": "bad record id",
+                        "sent_at": "2026-09-16T12:01:00+08:00",
+                    }],
+                    "next_after": 82,
+                    "has_more": False,
+                },
+            )
+            for page in invalid_pages:
+                with self.subTest(page=page):
+                    client.mention_alerts = AsyncMock(return_value=page)
+                    await app._refresh()
+                    self.assertEqual(app._mention_cursor, 81)
+                    self.assertEqual(list(app._notifications), [])
+                    self.assertTrue(app._last_error)
+                    self.assertEqual(client.sent, [])
+
     async def test_help_unknown_command_and_slash_text(self):
         client = FakeClient()
         app = FisoChatApp(client)
@@ -446,7 +697,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             await app.command("/not-a-command")
             self.assertEqual(client.sent, [])
-            app.query_one(Input).value = "//hello"
+            app.query_one(CommandInput).value = "//hello"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             self.assertEqual(client.sent, [("group-a", "/hello", None)])
@@ -468,7 +719,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(70, 24)) as pilot:
             await pilot.pause()
             self.assertIsNone(app.selected_group)
-            app.query_one(Input).value = "不能发送"
+            app.query_one(CommandInput).value = "不能发送"
             await pilot.press("enter")
             self.assertEqual(client.sent, [])
 

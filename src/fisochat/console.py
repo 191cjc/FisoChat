@@ -23,7 +23,7 @@ from textual.containers import Horizontal, Vertical
 from textual.selection import Selection
 from textual.screen import ModalScreen
 from textual.strip import Strip
-from textual.widgets import Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Label, ListItem, ListView, RichLog, Static
 from textual_image import renderable as image_renderables
 from textual_image.widget import HalfcellImage, Image as AutoImage
 
@@ -34,9 +34,14 @@ from .console_images import PreviewImage, decode_image, fetch_image, image_attac
 from .console_mentions import MentionMember, MentionSpan
 
 
+MENTION_ALERT_PAGE_LIMIT = 100
+MENTION_ALERT_MAX_PAGES = 5
+MENTION_ALERT_TITLE = "群聊 @ 提醒"
+
+
 HELP = """FisoChat · 终端聊天
 
-输入消息后按 Enter，发送到当前选中的 QQ 群。
+输入消息后按 Enter 发送；按 Shift+Enter 换行，多行粘贴会保留换行。
 以 / 开头的是终端命令；发送斜杠正文时，使用 // 开头。
 输入 / 自动提示命令，↑↓ 选择、Tab 补全、Esc 收起。
 未写完的命令按 Enter 补全，完整命令按 Enter 执行。
@@ -79,6 +84,20 @@ def single_line(value: object) -> str:
 def short_name(name: str) -> str:
     name = single_line(name) or "群成员"
     return name if len(name) <= 2 else name[:2] + "…"
+
+
+def bounded_single_line(value: object, limit: int, *, fallback: str) -> str:
+    text = single_line(value) or fallback
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def mention_alert_text(alert: dict[str, Any]) -> str:
+    group_id = bounded_single_line(alert.get("group_openid", ""), 48, fallback="未知群")
+    username = bounded_single_line(alert.get("username", ""), 32, fallback="群成员")
+    content = bounded_single_line(alert.get("content", ""), 180, fallback="[非文本消息]")
+    record_id = alert.get("record_id")
+    shown_record_id = record_id if type(record_id) is int else "?"
+    return f"群 {group_id} · {username} · #{shown_record_id}: {content}"
 
 
 def message_text(
@@ -589,9 +608,11 @@ class FisoChatApp(App):
     #notice { height: 1; margin: 0 2; color: #a1adb9; }
     #command-hints { display: none; height: auto; max-height: 40%; margin: 0 2;
                      padding: 0 1; border-top: solid #405b59; background: #161d26; }
-    #composer { height: 3; margin: 0 2; border-top: solid #405b59; padding: 0 1; }
+    #composer { height: auto; min-height: 2; max-height: 6; margin: 0 2;
+                border-top: solid #405b59; padding: 0 1; }
     #prompt { width: 3; content-align: center middle; color: #7dd3c7; }
-    #input { width: 1fr; height: 1; border: none; background: transparent; padding: 0; }
+    #input { width: 1fr; height: auto; min-height: 1; max-height: 5;
+             border: none; background: transparent; padding: 0; }
     #input:focus { border: none; }
     HelpScreen { align: center middle; background: #000000 60%; }
     #help-dialog { width: 76; max-width: 95%; height: auto; max-height: 95%;
@@ -638,6 +659,7 @@ class FisoChatApp(App):
         self._refreshing = False
         self._sending = False
         self._last_error = ""
+        self._mention_cursor: int | None = None
         self._command_hints = Static(id="command-hints", markup=False)
 
     def get_default_screen(self) -> CommandScreen:
@@ -653,17 +675,17 @@ class FisoChatApp(App):
         )
         messages.can_focus = False
         yield messages
-        yield Static("Enter 发送 · /name 完整昵称 · /groups 切群 · /help 帮助", id="notice")
+        yield Static("Enter 发送 · Shift+Enter 换行 · /groups 切群 · /help 帮助", id="notice")
         yield self._command_hints
         with Horizontal(id="composer"):
             yield Static("❯", id="prompt")
             yield CommandInput(placeholder="输入消息，/ 查看命令，@ 选择成员…", id="input",
-                               max_length=2000, select_on_focus=False)
+                               max_length=2000)
 
     async def on_mount(self) -> None:
         self.theme = "textual-dark"
         await self.client.open()
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", CommandInput).focus()
         self.action_refresh()
         self.set_interval(2, self.action_refresh)
 
@@ -700,13 +722,24 @@ class FisoChatApp(App):
             self.copy_to_clipboard(selection)
             return
         focused = self.focused
-        if isinstance(focused, Input) and focused.selected_text:
+        if isinstance(focused, CommandInput) and focused.selected_text:
             self.copy_to_clipboard(focused.selected_text)
 
     async def _refresh(self) -> None:
         try:
             async with self._data_lock:
                 groups = await self.client.groups()
+                if self._mention_cursor is None:
+                    self._mention_cursor = max(
+                        (
+                            group["latest_record_id"]
+                            for group in groups
+                            if type(group.get("latest_record_id")) is int
+                        ),
+                        default=0,
+                    )
+                else:
+                    await self._refresh_mention_alerts()
                 health = await self.client.health()
                 online = health.get("qq_gateway", {}).get("connected", False)
                 self.query_one("#connection", Static).update(Text(
@@ -744,6 +777,58 @@ class FisoChatApp(App):
         finally:
             self._refreshing = False
 
+    async def _refresh_mention_alerts(self) -> None:
+        assert self._mention_cursor is not None
+        for _ in range(MENTION_ALERT_MAX_PAGES):
+            after = self._mention_cursor
+            page = await self.client.mention_alerts(
+                after, limit=MENTION_ALERT_PAGE_LIMIT
+            )
+            if not isinstance(page, dict):
+                raise ConsoleError("后台返回的 @ 提醒数据无效。")
+            next_after = page.get("next_after")
+            alerts = page.get("mentions")
+            has_more = page.get("has_more")
+            if (
+                type(next_after) is not int
+                or not after <= next_after < 2**63
+                or not isinstance(alerts, list)
+                or len(alerts) > MENTION_ALERT_PAGE_LIMIT
+                or type(has_more) is not bool
+                or (has_more and next_after == after)
+            ):
+                raise ConsoleError("后台返回的 @ 提醒数据无效。")
+            for alert in alerts:
+                if (
+                    not isinstance(alert, dict)
+                    or type(alert.get("record_id")) is not int
+                    or not 0 < alert["record_id"] <= next_after
+                    or any(
+                        not isinstance(alert.get(field), str)
+                        for field in ("group_openid", "username", "content", "sent_at")
+                    )
+                ):
+                    raise ConsoleError("后台返回的 @ 提醒数据无效。")
+            self._mention_cursor = next_after
+            seen: set[int] = set()
+            for alert in alerts:
+                record_id = alert["record_id"]
+                if (
+                    not after < record_id
+                    or record_id in seen
+                ):
+                    continue
+                seen.add(record_id)
+                self.notify(
+                    mention_alert_text(alert),
+                    title=MENTION_ALERT_TITLE,
+                    severity="information",
+                    timeout=8,
+                    markup=False,
+                )
+            if not has_more or next_after == after:
+                break
+
     async def select_group(self, group_id: str) -> None:
         if self._sending:
             return
@@ -776,7 +861,7 @@ class FisoChatApp(App):
         self.query_one("#group-title", Static).update(Text(f"群聊 {group_label}  ·  /groups 切换"))
         self.query_one("#messages", RichLog).clear()
         self._merge_messages(batch)
-        self.notice("Enter 发送 · /name 完整昵称 · /groups 切群 · /help 帮助")
+        self.notice("Enter 发送 · Shift+Enter 换行 · /groups 切群 · /help 帮助")
 
     def author_alias(self, message: dict[str, Any]) -> str:
         aliases = self._aliases.setdefault(self.selected_group or "", {})
@@ -847,8 +932,8 @@ class FisoChatApp(App):
             for message in fresh:
                 log.write(self.render_message(message), scroll_end=follow)
 
-    @on(Input.Submitted, "#input")
-    async def submitted(self, event: Input.Submitted) -> None:
+    @on(CommandInput.Submitted, "#input")
+    async def submitted(self, event: CommandInput.Submitted) -> None:
         content = event.value.strip()
         mention_offset = len(event.value) - len(event.value.lstrip())
         if not content or self._sending:
@@ -880,18 +965,18 @@ class FisoChatApp(App):
                 reply_to=self.reply_to["message_id"] if self.reply_to else None,
                 **({"mentions": mentions} if mentions else {}),
             )
-            self.query_one("#input", Input).value = ""
+            self.query_one("#input", CommandInput).value = ""
             self.drafts.pop(self.selected_group, None)
             self.draft_mentions.pop(self.selected_group, None)
             self.reply_to = None
             self.notice("消息已发送。" if result.get("recorded") else "QQ 已确认发送，但记录未保存，请勿重复发送。")
             self.action_refresh()
         except ConsoleError as exc:
-            self.query_one("#input", Input).value = draft
+            self.query_one("#input", CommandInput).value = draft
             self.notice(str(exc), error=True)
         finally:
             self._sending = False
-            input_widget = self.query_one("#input", Input)
+            input_widget = self.query_one("#input", CommandInput)
             input_widget.disabled = False
             input_widget.focus()
 
@@ -1041,10 +1126,10 @@ class FisoChatApp(App):
     async def _group_picked(self, group_id: str | None) -> None:
         if group_id is not None and group_id != self.selected_group:
             await self.select_group(group_id)
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", CommandInput).focus()
 
     def _image_closed(self, _result: None) -> None:
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", CommandInput).focus()
 
     def _sticker_closed(self, result: dict[str, Any] | None) -> None:
         if result is not None:
@@ -1054,7 +1139,7 @@ class FisoChatApp(App):
                 else "QQ 已确认发送，但记录未保存，请勿重复发送。"
             )
             self.action_refresh()
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", CommandInput).focus()
 
     def action_names(self) -> None:
         if not self.messages:
@@ -1068,7 +1153,7 @@ class FisoChatApp(App):
         if self.show_names:
             self._hide_names()
             self.notice("已恢复昵称缩写。")
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", CommandInput).focus()
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())

@@ -24,13 +24,20 @@ from fisochat.services.stickers import (
     StickerStore,
 )
 
-from .message_display import element_texts, mention_names, readable_mentions, safe_http_url
+from .message_display import (
+    element_texts,
+    mention_names,
+    mentions_current_bot,
+    readable_mentions,
+    safe_http_url,
+)
 
 
 GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 MEMBER_OPENID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 MAX_REPLY_MESSAGE_ID_CHARS = 256
 MAX_CONSOLE_MESSAGE_CHARS = 2000
+MAX_MENTION_ALERT_CONTENT_CHARS = 500
 
 
 class AdminMessageRepository(BotMessageRepository, Protocol):
@@ -39,6 +46,10 @@ class AdminMessageRepository(BotMessageRepository, Protocol):
     async def recent(
         self, group_id: str, *, limit: int = 20,
         before_record_id: int | None = None, after_record_id: int | None = None,
+    ) -> Sequence[StoredGroupMessage]: ...
+
+    async def scan_after(
+        self, after_record_id: int, *, limit: int = 100
     ) -> Sequence[StoredGroupMessage]: ...
 
     async def get_by_record_id(self, group_id: str, record_id: int) -> StoredGroupMessage | None: ...
@@ -116,6 +127,36 @@ class AdminMessageHandler:
         ordered = messages if after is not None else reversed(messages)
         return web.json_response({"messages": [_message_view(message) for message in ordered]},
                                  headers={"Cache-Control": "no-store"})
+
+    async def list_group_mention_alerts(
+        self, request: web.Request
+    ) -> web.Response:
+        denied = self._access_error(request)
+        if denied is not None:
+            return denied
+        try:
+            after = _zero_cursor(request.query.get("after"))
+            limit = _cursor(request.query.get("limit", "100"))
+            if limit is None or not 1 <= limit <= 100:
+                raise ValueError
+        except ValueError:
+            return _error("invalid_cursor", "分页参数无效。", 400)
+        records = await self._repository.scan_after(after, limit=limit)
+        mentions = [
+            _mention_alert_view(record)
+            for record in records
+            if not record.is_bot
+            and not record.recalled_at
+            and mentions_current_bot(record.event_type, record.payload)
+        ]
+        return web.json_response(
+            {
+                "mentions": mentions,
+                "next_after": records[-1].record_id if records else after,
+                "has_more": len(records) == limit,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def save_sticker(self, request: web.Request) -> web.Response:
         denied = self._access_error(request)
@@ -380,6 +421,9 @@ def register_admin_message_routes(
     )
     application.router.add_get("/internal/groups", handler.list_groups)
     application.router.add_get("/internal/group-messages", handler.list_messages)
+    application.router.add_get(
+        "/internal/group-mention-alerts", handler.list_group_mention_alerts
+    )
     application.router.add_post("/internal/stickers", handler.save_sticker)
     application.router.add_get("/internal/stickers", handler.list_stickers)
     application.router.add_get(
@@ -426,6 +470,26 @@ def _cursor(value: str | None) -> int | None:
     if not 1 <= number < 2**63:
         raise ValueError
     return number
+
+
+def _zero_cursor(value: str | None) -> int:
+    if value is None or not value.isascii() or not value.isdecimal() or len(value) > 19:
+        raise ValueError
+    number = int(value)
+    if not 0 <= number < 2**63:
+        raise ValueError
+    return number
+
+
+def _mention_alert_view(message: StoredGroupMessage) -> dict[str, Any]:
+    content = readable_mentions(message.content, mention_names(message.payload))
+    return {
+        "record_id": message.record_id,
+        "group_openid": message.group_openid,
+        "username": message.username or "群成员",
+        "content": content[:MAX_MENTION_ALERT_CONTENT_CHARS],
+        "sent_at": message.sent_at or message.received_at,
+    }
 
 
 def _message_view(message: StoredGroupMessage) -> dict[str, Any]:

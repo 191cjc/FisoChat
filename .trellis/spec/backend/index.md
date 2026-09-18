@@ -21,6 +21,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Sticker Library Contracts](./sticker-library.md) | Storage, API, signing, terminal and QQ delivery contracts | Active |
 | [QQ Reply Context Contracts](./reply-context.md) | Opaque message IDs, reply eligibility, sequence allocation, and cross-layer forwarding | Active |
+| [Terminal Composer Contracts](./terminal-composer.md) | Multiline editing, paste normalization, limits, completion, drafts, and submission | Active |
+| [Terminal Bot-Mention Alert Contracts](./terminal-mention-alerts.md) | Global cursors, alert API, session popup state, and no-send guarantees | Active |
 
 ---
 

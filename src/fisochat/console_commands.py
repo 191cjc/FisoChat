@@ -9,7 +9,7 @@ from textual import events
 from textual.binding import Binding
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Input
+from textual.widgets import TextArea
 
 from .console_mentions import MentionMember, MentionSpan, edited_mentions
 
@@ -43,9 +43,12 @@ COMMANDS = (
 )
 
 
-class CommandInput(Input):
+class CommandInput(TextArea):
+    """Multiline chat composer with local command and mention completion."""
+
     BINDINGS = [
-        Binding("up,shift+tab", "previous_command", "上一项", show=False),
+        Binding("up", "previous_command", "上一项", show=False),
+        Binding("shift+tab", "previous_or_focus", "上一项", show=False),
         Binding("down", "next_command", "下一项", show=False),
         Binding("tab", "complete_command", "补全", show=False),
         Binding("escape", "hide_commands", "收起提示", show=False),
@@ -56,7 +59,18 @@ class CommandInput(Input):
             super().__init__()
             self.input = input_widget
 
-    def __init__(self, **kwargs: Any) -> None:
+    class Submitted(Message):
+        def __init__(self, input_widget: "CommandInput", value: str) -> None:
+            super().__init__()
+            self.input = input_widget
+            self.value = value
+
+        @property
+        def control(self) -> "CommandInput":
+            return self.input
+
+    def __init__(self, *, max_length: int = 2000, **kwargs: Any) -> None:
+        self.max_length = max_length
         self.matches: tuple[Command, ...] = ()
         self.command_index = 0
         self.command_hint: Text | None = None
@@ -67,11 +81,102 @@ class CommandInput(Input):
         self.mentions: list[MentionSpan] = []
         self._mention_value = ""
         self._mention_start = 0
-        super().__init__(**kwargs)
+        super().__init__(
+            soft_wrap=True,
+            tab_behavior="focus",
+            show_line_numbers=False,
+            highlight_cursor_line=False,
+            compact=True,
+            **kwargs,
+        )
 
-    def watch_value(self) -> None:
+    @property
+    def value(self) -> str:
+        """Compatibility alias for callers that previously used ``Input.value``."""
+        return self.text
+
+    @value.setter
+    def value(self, value: str) -> None:
+        if len(value) > self.max_length:
+            return
+        self.load_text(value)
+        self.cursor_position = len(value)
+        self._sync_text_state()
+
+    @property
+    def cursor_position(self) -> int:
+        return self.document.get_index_from_location(self.cursor_location)
+
+    @cursor_position.setter
+    def cursor_position(self, position: int) -> None:
+        position = max(0, min(position, len(self.value)))
+        self.move_cursor(self.document.get_location_from_index(position))
+
+    def _sync_text_state(self) -> None:
+        if self._mention_value == self.value:
+            return
         self.mentions = edited_mentions(self._mention_value, self.value, self.mentions)
         self._mention_value = self.value
+
+    def _replacement_fits(self, insert: str, start: tuple[int, int], end: tuple[int, int]) -> bool:
+        replaced = self.get_text_range(start, end)
+        return len(self.value) - len(replaced) + len(insert) <= self.max_length
+
+    def _replace_via_keyboard(
+        self, insert: str, start: tuple[int, int], end: tuple[int, int],
+    ) -> Any:
+        if self.disabled or self.read_only or not self._replacement_fits(insert, start, end):
+            return None
+        return super()._replace_via_keyboard(insert, start, end)
+
+    def _replace_offsets(self, insert: str, start: int, end: int) -> bool:
+        start_location = self.document.get_location_from_index(start)
+        end_location = self.document.get_location_from_index(end)
+        if (
+            self.disabled
+            or self.read_only
+            or not self._replacement_fits(insert, start_location, end_location)
+        ):
+            return False
+        self.replace(insert, start_location, end_location, maintain_selection_offset=False)
+        self._sync_text_state()
+        return True
+
+    def _paste_text(self, text: str) -> None:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        if result := self._replace_via_keyboard(normalized, *self.selection):
+            self.move_cursor(result.end_location)
+            self.focus()
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        if self.disabled or self.read_only:
+            return
+        event.stop()
+        event.prevent_default()
+        self._paste_text(event.text)
+
+    def action_paste(self) -> None:
+        if not self.disabled and not self.read_only:
+            self._paste_text(self.app.clipboard)
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "shift+enter":
+            event.stop()
+            event.prevent_default()
+            if result := self._replace_via_keyboard("\n", *self.selection):
+                self.move_cursor(result.end_location)
+            return
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            await self.action_submit()
+            return
+        await super()._on_key(event)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area is not self:
+            return
+        self._sync_text_state()
         self.refresh_commands()
 
     def watch_selection(self) -> None:
@@ -170,8 +275,7 @@ class CommandInput(Input):
         start = self.cursor_position if start is None else start
         end = self.cursor_position
         expected = self.value[:start] + member.label + " " + self.value[end:]
-        self.replace(member.label + " ", start, end)
-        if self.value != expected:
+        if not self._replace_offsets(member.label + " ", start, end) or self.value != expected:
             return
         self.mentions.append(MentionSpan(start, start + len(member.label), member))
         self.mentions.sort(key=lambda span: span.start)
@@ -204,27 +308,44 @@ class CommandInput(Input):
         return result
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action in {"previous_command", "next_command", "complete_command"}:
-            return bool(self.matches or self.mention_matches)
         if action == "hide_commands":
             return self.command_hint is not None
         return super().check_action(action, parameters)
 
     def action_previous_command(self) -> None:
-        self.command_index = (self.command_index - 1) % len(self.matches or self.mention_matches)
+        candidates = self.matches or self.mention_matches
+        if not candidates:
+            self.action_cursor_up()
+            return
+        self.command_index = (self.command_index - 1) % len(candidates)
         self.refresh_commands()
 
+    def action_previous_or_focus(self) -> None:
+        if self.matches or self.mention_matches:
+            self.action_previous_command()
+        else:
+            self.screen.focus_previous()
+
     def action_next_command(self) -> None:
-        self.command_index = (self.command_index + 1) % len(self.matches or self.mention_matches)
+        candidates = self.matches or self.mention_matches
+        if not candidates:
+            self.action_cursor_down()
+            return
+        self.command_index = (self.command_index + 1) % len(candidates)
         self.refresh_commands()
 
     def action_complete_command(self) -> None:
         if self.mention_matches:
             self.insert_mention(self.mention_matches[self.command_index], start=self._mention_start)
             return
+        if not self.matches:
+            self.screen.focus_next()
+            return
         command = self.matches[self.command_index]
-        self.value = command.name + (" " if command.arguments else "")
-        self.cursor_position = len(self.value)
+        completion = command.name + (" " if command.arguments else "")
+        if not self._replace_offsets(completion, 0, len(self.value)):
+            return
+        self.cursor_position = len(completion)
         self.refresh_commands()
 
     def action_hide_commands(self) -> None:
@@ -232,6 +353,8 @@ class CommandInput(Input):
         self.refresh_commands()
 
     async def action_submit(self) -> None:
+        if self.disabled or self.read_only:
+            return
         if self.mention_matches:
             self.action_complete_command()
             return
@@ -241,7 +364,7 @@ class CommandInput(Input):
             if self.value.strip() != command.name or requires_arguments:
                 self.action_complete_command()
                 return
-        await super().action_submit()
+        self.post_message(self.Submitted(self, self.value))
 
 
 class CommandScreen(Screen):

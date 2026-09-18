@@ -499,6 +499,34 @@ class GroupMessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.add_gateway_event(event_type, payload)
         )
 
+    async def test_global_cursor_scan_orders_records_across_groups(self):
+        await self.add_event("first", group_id="group-a")
+        await self.add_event("second", group_id="group-b")
+        await self.repository.add_bot_message(
+            message_id="third",
+            group_openid="group-a",
+            username="FisoChat",
+            content="outbound",
+            message_type=0,
+            sent_at=datetime.now(timezone.utc).isoformat(),
+            payload={"content": "outbound"},
+        )
+
+        first_page = await self.repository.scan_after(0, limit=2)
+        second_page = await self.repository.scan_after(
+            first_page[-1].record_id, limit=2
+        )
+
+        self.assertEqual(
+            [(record.record_id, record.group_openid) for record in first_page],
+            [(1, "group-a"), (2, "group-b")],
+        )
+        self.assertEqual(
+            [(record.record_id, record.is_bot) for record in second_page],
+            [(3, True)],
+        )
+        self.assertEqual(await self.repository.scan_after(3), ())
+
     async def test_reference_contains_non_at_messages_and_bot_final_replies(self):
         await self.add_event("plain", content="not mentioned")
         await self.add_event(

@@ -131,6 +131,18 @@ class CommandCompletionTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             self.assertEqual(len(app.client.sent), 1)
 
+    async def test_command_completion_handles_leading_line_break(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(80, 28)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            composer.value = "\n/r"
+            composer.cursor_position = len(composer.value)
+
+            self.assertEqual([command.name for command in composer.matches], ["/refresh", "/reply"])
+            await pilot.press("tab")
+            self.assertEqual(composer.value, "/refresh")
+
 
 if __name__ == "__main__":
     unittest.main()

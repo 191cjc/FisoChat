@@ -37,6 +37,22 @@ def mention_names(payload: Any) -> dict[str, str]:
     return names
 
 
+def mentions_current_bot(event_type: str, payload: Any) -> bool:
+    """Return whether a stored gateway message explicitly mentions this bot."""
+    if event_type == "GROUP_AT_MESSAGE_CREATE":
+        return True
+    if not isinstance(payload, dict):
+        return False
+    mentions = payload.get("mentions")
+    return bool(
+        isinstance(mentions, list)
+        and any(
+            isinstance(member, dict) and member.get("is_you") is True
+            for member in mentions
+        )
+    )
+
+
 def readable_mentions(content: str, names: Mapping[str, str]) -> str:
     """Convert only markers backed by names from this message's metadata.
 

@@ -98,7 +98,7 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         await self.capture(event("incoming"))
         for route in (
             "/internal/groups", "/internal/group-messages?group=group-1",
-            "/internal/stickers",
+            "/internal/group-mention-alerts?after=0", "/internal/stickers",
         ):
             self.assertEqual((await self.client.get(route)).status, 401)
         headers = {"Authorization": "Bearer local-token"}
@@ -118,6 +118,84 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/stickers/" + "a" * 64)).status, 404)
         self.assertEqual((await self.client.get("/")).status, 404)
         self.assertEqual((await self.client.get("/group-messages")).status, 404)
+
+    async def test_group_mention_feed_filters_and_advances_global_cursor(self):
+        await self.capture(event("ordinary", group="group-1"))
+        by_event = event("by-event", group="group-2", content="event mention")
+        by_event["t"] = "GROUP_AT_MESSAGE_CREATE"
+        await self.capture(by_event)
+        by_payload = event(
+            "by-payload",
+            group="group-3",
+            content="<@current> " + "x" * 600,
+        )
+        by_payload["d"]["mentions"] = [
+            {"id": "current", "username": "FisoChat", "is_you": True}
+        ]
+        await self.capture(by_payload)
+        other_member = event("other-member", group="group-4")
+        other_member["d"]["mentions"] = [{"is_you": False}]
+        await self.capture(other_member)
+        await self.recorder.repository.add_bot_message(
+            message_id="own-message",
+            group_openid="group-5",
+            username="FisoChat",
+            content="own payload",
+            message_type=0,
+            sent_at=datetime.now(timezone.utc).isoformat(),
+            payload={"mentions": [{"is_you": True}]},
+        )
+        headers = {"Authorization": "Bearer local-token"}
+
+        first = await self.client.get(
+            "/internal/group-mention-alerts?after=0&limit=3", headers=headers
+        )
+        first_page = await first.json()
+        self.assertEqual(first.status, 200)
+        self.assertEqual(first.headers["Cache-Control"], "no-store")
+        self.assertEqual(
+            [alert["record_id"] for alert in first_page["mentions"]], [2, 3]
+        )
+        self.assertEqual(first_page["next_after"], 3)
+        self.assertTrue(first_page["has_more"])
+        self.assertTrue(first_page["mentions"][1]["content"].startswith("@FisoChat "))
+        self.assertEqual(len(first_page["mentions"][1]["content"]), 500)
+
+        second = await self.client.get(
+            "/internal/group-mention-alerts?after=3&limit=3", headers=headers
+        )
+        second_page = await second.json()
+        self.assertEqual(second_page, {
+            "mentions": [], "next_after": 5, "has_more": False,
+        })
+        self.qq_send.assert_not_called()
+
+        console = ConsoleClient(str(self.client.make_url("/")), "local-token")
+        await console.open()
+        try:
+            client_page = await console.mention_alerts(0, limit=2)
+        finally:
+            await console.close()
+        self.assertEqual(client_page["next_after"], 2)
+        self.assertEqual(
+            [alert["record_id"] for alert in client_page["mentions"]], [2]
+        )
+
+    async def test_group_mention_feed_rejects_invalid_cursors(self):
+        headers = {"Authorization": "Bearer local-token"}
+        for query in (
+            "",
+            "?after=-1",
+            "?after=abc",
+            "?after=9223372036854775808",
+            "?after=0&limit=0",
+            "?after=0&limit=101",
+        ):
+            response = await self.client.get(
+                "/internal/group-mention-alerts" + query, headers=headers
+            )
+            self.assertEqual(response.status, 400, query)
+            self.assertEqual((await response.json())["error"]["code"], "invalid_cursor")
 
     async def test_incoming_mentions_display_names_without_rewriting_stored_history(self):
         incoming = event("display-mentions", content='<@target> 和 <@!second>、<qqbot-at-user id="target" />，未知 <@unknown>，例子 &lt;@target&gt;')
