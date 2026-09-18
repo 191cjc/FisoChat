@@ -2,7 +2,7 @@ import asyncio
 import tempfile
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import permutations
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -684,16 +684,16 @@ class GroupMessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 group_id="group-b", message_id="shared-bot"
             )
         )
-        self.assertIsNotNone(
-            await self.repository.find_console_reply_context(
-                "group-a", message_id="shared-user"
-            )
+        group_a_context = await self.repository.find_console_reply_context(
+            "group-a", message_id="shared-user"
         )
-        self.assertIsNone(
-            await self.repository.find_console_reply_context(
-                "group-b", message_id="shared-user"
-            )
+        group_b_context = await self.repository.find_console_reply_context(
+            "group-b", message_id="shared-user"
         )
+        self.assertIsNotNone(group_a_context)
+        self.assertIsNotNone(group_b_context)
+        self.assertEqual(group_a_context.group_id, "group-a")
+        self.assertEqual(group_b_context.group_id, "group-b")
 
     async def test_reference_cursor_with_equal_ids_is_group_scoped(self):
         await self.add_event("older-a", group_id="group-a", content="a old")
@@ -943,8 +943,7 @@ class GroupMessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([item.content for item in history], ["must remain"])
 
-    async def test_console_context_only_uses_recent_mentions_and_free_sequence(self):
-        await self.add_event("plain")
+    async def test_console_context_uses_latest_incoming_message_and_free_sequence(self):
         await self.add_event("mention", event_type="GROUP_AT_MESSAGE_CREATE")
         await self.repository.add_bot_message(
             message_id="first-reply",
@@ -956,18 +955,59 @@ class GroupMessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
             payload={"msg_seq": 1},
             source_message_id="mention",
         )
+        mention_context = await self.repository.find_console_reply_context(
+            "group-1", message_id="mention"
+        )
+        self.assertIsNotNone(mention_context)
+        self.assertEqual(mention_context.next_sequence, 2)
+
+        await self.add_event("plain")
 
         context = await self.repository.find_console_reply_context("group-1")
 
         self.assertIsNotNone(context)
-        self.assertEqual(context.message_id, "mention")
-        self.assertEqual(context.next_sequence, 2)
+        self.assertEqual(context.message_id, "plain")
+        self.assertEqual(context.next_sequence, 1)
 
-    async def test_console_context_rejects_non_mention_explicit_message(self):
-        await self.add_event("plain")
+    async def test_console_context_accepts_non_mention_explicit_message(self):
+        await self.add_event("opaque.message!id")
         context = await self.repository.find_console_reply_context(
-            "group-1", message_id="plain"
+            "group-1", message_id="opaque.message!id"
         )
+        self.assertIsNotNone(context)
+        self.assertEqual(context.message_id, "opaque.message!id")
+
+    async def test_console_context_rejects_expired_message(self):
+        event_type, payload = group_event("expired")
+        payload["d"]["timestamp"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=6)
+        ).isoformat()
+        self.assertTrue(await self.repository.add_gateway_event(event_type, payload))
+
+        context = await self.repository.find_console_reply_context(
+            "group-1", message_id="expired"
+        )
+
+        self.assertIsNone(context)
+
+    async def test_console_context_rejects_exhausted_sequences(self):
+        await self.add_event("source")
+        for sequence in range(1, 6):
+            await self.repository.add_bot_message(
+                message_id=f"reply-{sequence}",
+                group_openid="group-1",
+                username="AiQQ",
+                content="reply",
+                message_type=0,
+                sent_at=datetime.now(timezone.utc).isoformat(),
+                payload={"msg_seq": sequence},
+                source_message_id="source",
+            )
+
+        context = await self.repository.find_console_reply_context(
+            "group-1", message_id="source"
+        )
+
         self.assertIsNone(context)
 
     async def test_groups_are_sorted_by_latest_message(self):

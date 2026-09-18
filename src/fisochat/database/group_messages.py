@@ -267,8 +267,6 @@ class GroupMessageRepository:
             now = datetime.now(timezone.utc)
             for row in rows:
                 candidate = _row_to_message(row)
-                if not _explicitly_mentions_bot(candidate):
-                    continue
                 sent_at = _parse_datetime(candidate.sent_at)
                 if sent_at is None:
                     continue
@@ -669,16 +667,6 @@ def _extract_image_urls(payload: dict[str, Any]) -> tuple[str, ...]:
         elif isinstance(value, list):
             pending.extend(value)
     return tuple(urls)
-
-
-def _explicitly_mentions_bot(record: StoredGroupMessage) -> bool:
-    if record.event_type == "GROUP_AT_MESSAGE_CREATE":
-        return True
-    mentions = record.payload.get("mentions")
-    return isinstance(mentions, list) and any(
-        isinstance(mention, dict) and mention.get("is_you") is True
-        for mention in mentions
-    )
 
 
 async def _used_reply_sequences(

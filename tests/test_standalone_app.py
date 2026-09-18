@@ -240,11 +240,17 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
             for reply in (None, "mention-sdk"):
                 with self.subTest(reply=reply):
                     http.reset_mock()
-                    response = await self.client.post("/internal/group-messages", headers={"Authorization": "Bearer local-token"}, json={
+                    payload = {
                         "group_openid": "group-1", "content": "@小明 你好",
-                        "reply_to_message_id": reply,
                         "mentions": [{"record_id": 1, "start": 0, "end": 3}],
-                    })
+                    }
+                    if reply is not None:
+                        payload["reply_to_message_id"] = reply
+                    response = await self.client.post(
+                        "/internal/group-messages",
+                        headers={"Authorization": "Bearer local-token"},
+                        json=payload,
+                    )
                     self.assertEqual(response.status, 200)
                     http.assert_awaited_once()
                     wire = http.call_args.kwargs["json"]
@@ -399,19 +405,20 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
             await console.close()
 
     async def test_admin_reply_uses_recorded_context_and_increments_sequence(self):
-        message = event("question")
-        message["t"] = "GROUP_AT_MESSAGE_CREATE"
+        message_id = "A" * 60 + "." + "b" * 60 + "!opaque-id"
+        message = event(message_id)
         await self.capture(message)
         headers = {"Authorization": "Bearer local-token"}
         for sequence in (1, 2):
             response = await self.client.post("/internal/group-messages", headers=headers, json={
-                "group_openid": "group-1", "reply_to_message_id": "question", "content": "指定回复",
+                "group_openid": "group-1", "reply_to_message_id": message_id, "content": "指定回复",
             })
             self.assertEqual(response.status, 200)
             self.assertTrue((await response.json())["recorded"])
+            self.assertEqual(self.qq_send.call_args.kwargs["msg_id"], message_id)
             self.assertEqual(self.qq_send.call_args.kwargs["msg_seq"], sequence)
         response = await self.client.post("/internal/group-messages", headers=headers, json={
-            "group_openid": "another-group", "reply_to_message_id": "question", "content": "禁止串群",
+            "group_openid": "another-group", "reply_to_message_id": message_id, "content": "禁止串群",
         })
         self.assertEqual(response.status, 409)
         self.assertEqual(self.qq_send.call_count, 2)

@@ -28,7 +28,8 @@ from .message_display import element_texts, mention_names, readable_mentions, sa
 
 
 GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
-MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+MEMBER_OPENID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+MAX_REPLY_MESSAGE_ID_CHARS = 256
 MAX_CONSOLE_MESSAGE_CHARS = 2000
 
 
@@ -266,6 +267,7 @@ class AdminMessageHandler:
             return _error("invalid_request", "请求包含未知字段。", 400)
         group_id = payload.get("group_openid")
         content = payload.get("content")
+        has_reply_to = "reply_to_message_id" in payload
         reply_to = payload.get("reply_to_message_id")
         if not isinstance(group_id, str) or not GROUP_ID_RE.fullmatch(group_id):
             return _error("invalid_group", "群 OpenID 格式无效。", 400)
@@ -279,9 +281,7 @@ class AdminMessageHandler:
                 f"正文必须包含 1 至 {MAX_CONSOLE_MESSAGE_CHARS} 个字符。",
                 400,
             )
-        if reply_to is not None and (
-            not isinstance(reply_to, str) or not MESSAGE_ID_RE.fullmatch(reply_to)
-        ):
+        if has_reply_to and not _valid_reply_message_id(reply_to):
             return _error("invalid_reply_context", "回复消息 ID 格式无效。", 400)
 
         mentions = payload.get("mentions", [])
@@ -318,7 +318,7 @@ class AdminMessageHandler:
                 return _error("invalid_content", "加入 @ 成员标记后消息过长，请缩短正文。", 400)
             display_options = {"record_content": display_content} if mentions else {}
             try:
-                if reply_to is None:
+                if not has_reply_to:
                     send = (self._sender.send_proactive_markdown if mentions
                             else self._sender.send_proactive_text)
                     sent = await send(
@@ -334,7 +334,7 @@ class AdminMessageHandler:
                     if context is None:
                         return _error(
                             "no_reply_context",
-                            "指定消息不是 5 分钟内可用的 @ 消息上下文。",
+                            "指定消息不是 5 分钟内可用的消息上下文。",
                             409,
                         )
                     send = (self._sender.send_markdown_reply if mentions
@@ -455,7 +455,15 @@ def _can_mention(message: StoredGroupMessage) -> bool:
     # Incoming bots have member OpenIDs just like people. Our own outbound
     # records use BOT_* events and must not become mention targets.
     return bool(message.event_type in GATEWAY_GROUP_EVENT_TYPES and not message.recalled_at
-                and MESSAGE_ID_RE.fullmatch(message.member_openid))
+                and MEMBER_OPENID_RE.fullmatch(message.member_openid))
+
+
+def _valid_reply_message_id(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and 1 <= len(value) <= MAX_REPLY_MESSAGE_ID_CHARS
+        and all(character.isprintable() and not character.isspace() for character in value)
+    )
 
 
 def _error(code: str, message: str, status: int) -> web.Response:

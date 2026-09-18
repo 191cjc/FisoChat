@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Sticker Library Contracts](./sticker-library.md) | Storage, API, signing, terminal and QQ delivery contracts | Active |
+| [QQ Reply Context Contracts](./reply-context.md) | Opaque message IDs, reply eligibility, sequence allocation, and cross-layer forwarding | Active |
 
 ---
 
