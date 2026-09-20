@@ -105,3 +105,25 @@ Added a multiline Textual composer that preserves pasted line breaks and a cross
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Fix uppercase sticker save shortcut
+<!-- trellis-session: v=2 fp=7f234ece4173aebf -->
+
+**Date**: 2026-09-20
+**Task**: Fix uppercase sticker save shortcut
+**Branch**: `main`
+
+### Summary
+
+Bound both lowercase s and Shift+S to manual sticker collection, added regression coverage for exactly-once saves, duplicate feedback, and draft preservation, and tightened the sticker terminal test contract.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3479c6` | fix: support uppercase sticker save shortcut |
+
+### Status
+
+[OK] **Completed**
