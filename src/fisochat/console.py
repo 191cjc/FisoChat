@@ -224,7 +224,7 @@ class ImageScreen(ModalScreen):
         Binding("left", "previous", "上一张", show=False, priority=True),
         Binding("right", "next", "下一张", show=False, priority=True),
         Binding("r", "reload", "重试", show=False, priority=True),
-        Binding("s", "save", "收藏", show=False, priority=True),
+        Binding("s,shift+s", "save", "收藏", show=False, priority=True),
     ]
     DEFAULT_CSS = """
     ImageScreen { align: center middle; background: #000000 70%; }

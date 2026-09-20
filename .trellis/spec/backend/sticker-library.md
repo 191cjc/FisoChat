@@ -136,9 +136,9 @@ closed with 404 for every invalid or unavailable object.
   current-disk lookup.
 - Sender tests assert exactly one upload and one message call, no retries, and no
   signature or URL in the persisted payload.
-- Terminal tests assert explicit `S` save only, duplicate feedback, global
-  cross-group selection, deletion refresh, draft preservation, and ambiguous
-  send warnings.
+- Terminal tests assert that explicit lowercase `s` and `Shift+S` each trigger
+  one save, alongside duplicate feedback, global cross-group selection,
+  deletion refresh, draft preservation, and ambiguous send warnings.
 - Full project tests, compile, lock check, diff check, and package build must pass.
 
 ### 7. Wrong vs Correct

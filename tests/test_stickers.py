@@ -354,12 +354,16 @@ class StickerConsoleTests(unittest.IsolatedAsyncioTestCase):
             composer.value = "保留草稿"
             await app.command("/image 80")
             self.assertIsInstance(app.screen, ImageScreen)
-            await pilot.press("s")
+            await pilot.press("shift+s")
             await pilot.pause()
             self.assertEqual(client.saved, [("group-a", 80, 1)])
             self.assertIn("已收藏", str(app.screen.query_one("#image-save-status", Static).render()))
             await pilot.press("s")
             await pilot.pause()
+            self.assertEqual(client.saved, [
+                ("group-a", 80, 1),
+                ("group-a", 80, 1),
+            ])
             self.assertIn("已在表情库", str(app.screen.query_one("#image-save-status", Static).render()))
             await pilot.press("escape")
             self.assertEqual(composer.value, "保留草稿")
