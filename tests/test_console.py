@@ -258,7 +258,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.is_running)
             self.assertEqual(app.clipboard, "only line")
 
-    async def test_copy_across_wrapped_lines_uses_visible_line_boundaries(self):
+    async def test_copy_across_wrapped_lines_omits_visual_line_boundaries(self):
         app = FisoChatApp(FakeClient())
         async with app.run_test(size=(70, 24)) as pilot:
             await pilot.pause()
@@ -270,7 +270,53 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             await pilot.mouse_up(log, offset=(3, 1))
             await pilot.press("ctrl+c")
 
+            self.assertEqual(app.clipboard, "cdefgh")
+
+    async def test_copy_across_separate_writes_retains_logical_newline(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            log = app.query_one(SelectableRichLog)
+            log.clear().write(Text("abcde"), width=5, scroll_end=False)
+            log.write(Text("fghij"), width=5, scroll_end=False)
+            await pilot.pause()
+
+            await pilot.mouse_down(log, offset=(2, 0))
+            await pilot.mouse_up(log, offset=(3, 1))
+            await pilot.press("ctrl+c")
+
             self.assertEqual(app.clipboard, "cde\nfgh")
+
+    async def test_copy_boundaries_follow_deferred_clear_and_max_lines(self):
+        app = FisoChatApp(FakeClient())
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.pause()
+            log = app.query_one(SelectableRichLog)
+            log.clear()
+            log.max_lines = 3
+            log._size_known = False
+            log.write(Text("abcde"), width=3, scroll_end=False)
+            log.write(Text("fghij"), width=3, scroll_end=False)
+            self.assertEqual(log.lines, [])
+            self.assertEqual(log._logical_line_starts, [])
+
+            log._size_known = True
+            while log._deferred_renders:
+                log.write(*log._deferred_renders.popleft())
+            self.assertEqual(len(log.lines), 3)
+            self.assertEqual(log._logical_line_starts, [False, True, False])
+
+            await pilot.mouse_down(log, offset=(0, 0))
+            await pilot.mouse_up(log, offset=(2, 2))
+            await pilot.press("ctrl+c")
+            self.assertEqual(app.clipboard, "de\nfghij")
+
+            log.clear().write(Text("abcdefghij"), width=3, scroll_end=False)
+            self.assertEqual(log._logical_line_starts, [False, False, False])
+            await pilot.mouse_down(log, offset=(0, 0))
+            await pilot.mouse_up(log, offset=(1, 2))
+            await pilot.press("ctrl+c")
+            self.assertEqual(app.clipboard, "defghij")
 
     async def test_copy_after_horizontal_scroll_accounts_for_wide_characters(self):
         app = FisoChatApp(FakeClient())
@@ -653,6 +699,140 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app._mention_cursor, 83)
             self.assertEqual(len(list(app._notifications)), 2)
             self.assertEqual(client.sent, [])
+
+    async def test_current_group_mention_advances_cursor_without_popup(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app.selected_group, "group-a")
+
+            composer = app.query_one(CommandInput)
+            composer.value = "当前群草稿"
+            composer.cursor_position = 3
+            app.reply_to = app.messages[80]
+            composer.focus()
+            client.records["group-a"].append(message(82, "当前群 @ 消息"))
+            client.alerts[82] = {
+                "record_id": 82,
+                "group_openid": "group-a",
+                "username": "当前群用户",
+                "content": "请查看当前群",
+                "sent_at": "2026-09-16T12:01:00+08:00",
+            }
+
+            await app._refresh()
+            await pilot.pause()
+
+            self.assertEqual(app._mention_cursor, 82)
+            self.assertEqual(list(app._notifications), [])
+            self.assertEqual(app._mention_notifications, {})
+            self.assertEqual(app.selected_group, "group-a")
+            self.assertEqual(composer.value, "当前群草稿")
+            self.assertEqual(composer.cursor_position, 3)
+            self.assertEqual(app.reply_to["record_id"], 80)
+            self.assertTrue(composer.has_focus)
+            self.assertEqual(client.sent, [])
+
+            await app.select_group("group-b")
+            await app.select_group("group-a")
+            await app._refresh()
+            await pilot.pause()
+            self.assertEqual(list(app._notifications), [])
+            self.assertEqual(app._mention_cursor, 82)
+
+    async def test_selecting_group_dismisses_only_its_mention_popups(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            client.records["group-b"].append(message(82, "group-b @"))
+            client.records["group-a"].append(message(83, "group-c @"))
+            client.alerts[82] = {
+                "record_id": 82,
+                "group_openid": "group-b",
+                "username": "B 群用户",
+                "content": "B 群提醒",
+                "sent_at": "2026-09-16T12:01:00+08:00",
+            }
+            client.alerts[83] = {
+                "record_id": 83,
+                "group_openid": "group-c",
+                "username": "C 群用户",
+                "content": "C 群提醒",
+                "sent_at": "2026-09-16T12:02:00+08:00",
+            }
+
+            await app._refresh()
+            self.assertEqual(app._mention_cursor, 83)
+            self.assertEqual(set(app._mention_notifications), {"group-b", "group-c"})
+
+            await app.select_group("group-b")
+            await pilot.pause()
+
+            notifications = list(app._notifications)
+            self.assertEqual(len(notifications), 1)
+            self.assertIn("C 群提醒", notifications[0].message)
+            self.assertEqual(set(app._mention_notifications), {"group-c"})
+            self.assertEqual(app.selected_group, "group-b")
+            self.assertEqual(client.sent, [])
+
+            await app.select_group("group-a")
+            await app._refresh()
+            await pilot.pause()
+            self.assertEqual(len(list(app._notifications)), 1)
+            self.assertEqual(app._mention_cursor, 83)
+            self.assertEqual(client.sent, [])
+
+    async def test_immediate_group_switch_dismisses_new_mention_without_race(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            client.records["group-b"].append(message(82, "group-b @"))
+            client.alerts[82] = {
+                "record_id": 82,
+                "group_openid": "group-b",
+                "username": "B 群用户",
+                "content": "立即切换",
+                "sent_at": "2026-09-16T12:01:00+08:00",
+            }
+
+            await app._refresh()
+            await app.select_group("group-b")
+
+            self.assertEqual(app.selected_group, "group-b")
+            self.assertEqual(list(app._notifications), [])
+            self.assertEqual(app._mention_notifications, {})
+            self.assertEqual(app._mention_cursor, 82)
+            self.assertEqual(client.sent, [])
+
+    async def test_mention_notification_tracking_prunes_expired_alerts_on_refresh(self):
+        client = FakeClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            client.records["group-b"].append(message(82, "group-b @"))
+            client.alerts[82] = {
+                "record_id": 82,
+                "group_openid": "group-b",
+                "username": "B 群用户",
+                "content": "会过期",
+                "sent_at": "2026-09-16T12:01:00+08:00",
+            }
+
+            await app._refresh()
+            self.assertEqual(set(app._mention_notifications), {"group-b"})
+            for notification in app._mention_notifications["group-b"]:
+                notification.raised_at -= notification.timeout + 1
+
+            await app._refresh()
+
+            self.assertEqual(app._mention_notifications, {})
 
     async def test_invalid_mention_projection_does_not_advance_cursor(self):
         client = FakeClient()

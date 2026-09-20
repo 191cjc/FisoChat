@@ -52,11 +52,19 @@ returns:
   `latest_record_id` on the first successful refresh and emits no historical
   notifications.
 - Later refreshes retain the last successful cursor across transient errors and
-  show each accepted record at most once per terminal process.
+  process each accepted record at most once per terminal process.
 - Validate the complete feed page and every alert projection before advancing
   the cursor or showing any alert. A malformed page is rejected atomically.
-- Each alert uses Textual `notify(..., timeout=8, markup=False)` with bounded,
-  single-line external text. Do not call `bell()`.
+- An accepted alert for the currently selected group advances the cursor but
+  does not create a popup.
+- An accepted alert for another group uses a Textual `Notification` with an
+  eight-second timeout, `markup=False`, and bounded single-line external text.
+  Do not call `bell()`.
+- The terminal retains notification identity by source group. Successfully
+  selecting a group dismisses only that group's visible mention notifications;
+  popups from other groups remain until selected or naturally expired.
+- Prune expired app-owned notification handles on every mention-feed refresh,
+  including refreshes with no new alerts.
 - Alert polling must not change the active group, composer text/cursor/selection,
   mention spans, reply state, message-log scroll position, or persistence.
 - This flow must not call the QQ sender, create an outbound record, reply,
@@ -73,6 +81,9 @@ returns:
 | Bot-authored or recalled matching record | Omit from `mentions`, cursor still advances |
 | Feed request fails | Keep the last successful terminal cursor and retry later |
 | Feed shape or any alert projection is invalid | Raise `ConsoleError`; keep the cursor and emit no alerts |
+| Accepted alert belongs to selected group | Advance cursor; do not create or retain a popup |
+| Group selection succeeds | Dismiss only that group's retained popups |
+| Group selection fails | Keep popup state unchanged |
 
 Every successful endpoint response uses `Cache-Control: no-store`.
 
@@ -80,8 +91,11 @@ Every successful endpoint response uses `Cache-Control: no-store`.
 
 - Good: an inactive group's incoming `GROUP_MESSAGE_CREATE` record containing
   `{"is_you": true}` produces one eight-second popup on the next poll.
-- Base: ordinary records advance the cursor without displaying anything; a
-  terminal restart establishes a new baseline and does not replay them.
+- Base: ordinary records and selected-group mentions advance the cursor without
+  displaying anything; a terminal restart establishes a new baseline and does
+  not replay them.
+- Good: when groups B and C both have popups, selecting B dismisses only B's
+  popup and leaves C's popup visible.
 - Bad: filtering in SQL before cursor advancement repeatedly rescans ordinary
   records and risks inconsistent malformed-payload behavior.
 - Bad: deriving alerts only from the selected group's rendered messages misses
@@ -98,16 +112,19 @@ Every successful endpoint response uses `Cache-Control: no-store`.
 - Console client tests assert the exact route and query parameters.
 - Textual tests assert initial-history suppression, inactive-group alerts,
   duplicate pages, reconnect recovery, eight-second no-markup notifications,
-  no bell, no sends, and preservation of all composer/reply/group/scroll state.
+  current-group suppression, targeted group-switch dismissal, immediate-switch
+  race safety, expired-handle pruning, no bell, no sends, and preservation of
+  all composer/reply/group/scroll state.
 - Invalid-feed tests cover a non-object top level and damaged projection
   fields; assert unchanged cursor and zero partial notifications.
 - Run focused repository/API/client/terminal suites and the full test suite.
 
 ## 7. Wrong vs Correct
 
-Wrong: inspect raw QQ payloads independently in the endpoint and terminal, or
-automatically reply when an @ is found.
+Wrong: inspect raw QQ payloads independently in the endpoint and terminal,
+clear all notifications when one group is selected, or automatically reply
+when an @ is found.
 
 Correct: classify raw storage once with `mentions_current_bot`, expose a small
-typed read-only feed, and let each terminal process own only its in-memory
-high-water mark and popup presentation.
+typed read-only feed, and let each terminal process own its in-memory high-water
+mark plus group-scoped popup identities.

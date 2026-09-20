@@ -20,6 +20,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.notifications import Notification, Notify
 from textual.selection import Selection
 from textual.screen import ModalScreen
 from textual.strip import Strip
@@ -128,6 +129,44 @@ def message_text(
 class SelectableRichLog(RichLog):
     """RichLog with Textual's missing line selection support."""
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._logical_line_starts: list[bool] = []
+
+    def write(
+        self,
+        content: object,
+        width: int | None = None,
+        expand: bool = False,
+        shrink: bool = True,
+        scroll_end: bool | None = None,
+        animate: bool = False,
+    ) -> SelectableRichLog:
+        if not self._size_known:
+            super().write(content, width, expand, shrink, scroll_end, animate)
+            return self
+
+        previous_line_count = len(self.lines)
+        previous_start_line = self._start_line
+        super().write(content, width, expand, shrink, scroll_end, animate)
+
+        trimmed_line_count = self._start_line - previous_start_line
+        appended_line_count = (
+            len(self.lines) + trimmed_line_count - previous_line_count
+        )
+        if appended_line_count:
+            self._logical_line_starts.extend(
+                [previous_line_count > 0] + [False] * (appended_line_count - 1)
+            )
+        if trimmed_line_count:
+            del self._logical_line_starts[:trimmed_line_count]
+        return self
+
+    def clear(self) -> SelectableRichLog:
+        super().clear()
+        self._logical_line_starts.clear()
+        return self
+
     @staticmethod
     def _character_offset_at_cell(strip: Strip, cell_offset: int) -> int:
         cell_position = 0
@@ -212,7 +251,14 @@ class SelectableRichLog(RichLog):
             selected_lines = [lines[start_line][start_offset:]]
             selected_lines.extend(lines[start_line + 1:end_line])
             selected_lines.append(lines[end_line][:end_offset])
-            text = "\n".join(selected_lines)
+            selected_text = [selected_lines[0]]
+            for line_number, selected_line in enumerate(
+                selected_lines[1:], start=start_line + 1,
+            ):
+                if self._logical_line_starts[line_number]:
+                    selected_text.append("\n")
+                selected_text.append(selected_line)
+            text = "".join(selected_text)
         return text, "\n"
 
 
@@ -660,6 +706,7 @@ class FisoChatApp(App):
         self._sending = False
         self._last_error = ""
         self._mention_cursor: int | None = None
+        self._mention_notifications: dict[str, list[Notification]] = {}
         self._command_hints = Static(id="command-hints", markup=False)
 
     def get_default_screen(self) -> CommandScreen:
@@ -779,6 +826,7 @@ class FisoChatApp(App):
 
     async def _refresh_mention_alerts(self) -> None:
         assert self._mention_cursor is not None
+        self._prune_mention_notifications()
         for _ in range(MENTION_ALERT_MAX_PAGES):
             after = self._mention_cursor
             page = await self.client.mention_alerts(
@@ -819,15 +867,45 @@ class FisoChatApp(App):
                 ):
                     continue
                 seen.add(record_id)
-                self.notify(
-                    mention_alert_text(alert),
-                    title=MENTION_ALERT_TITLE,
-                    severity="information",
-                    timeout=8,
-                    markup=False,
-                )
+                self._show_mention_alert(alert)
             if not has_more or next_after == after:
                 break
+
+    def _prune_mention_notifications(self) -> None:
+        self._mention_notifications = {
+            group_id: active
+            for group_id, notifications in self._mention_notifications.items()
+            if (
+                active := [
+                    notification
+                    for notification in notifications
+                    if not notification.has_expired
+                ]
+            )
+        }
+
+    def _show_mention_alert(self, alert: dict[str, Any]) -> None:
+        self._prune_mention_notifications()
+        group_id = alert["group_openid"]
+        if group_id == self.selected_group:
+            return
+        notification = Notification(
+            mention_alert_text(alert),
+            title=MENTION_ALERT_TITLE,
+            severity="information",
+            timeout=8,
+            markup=False,
+        )
+        self._mention_notifications.setdefault(group_id, []).append(notification)
+        self._on_notify(Notify(notification))
+
+    def _dismiss_mention_alerts(self, group_id: str) -> None:
+        self._prune_mention_notifications()
+        notifications = self._mention_notifications.pop(group_id, ())
+        for notification in notifications:
+            self._unnotify(notification, refresh=False)
+        if notifications:
+            self._refresh_notifications()
 
     async def select_group(self, group_id: str) -> None:
         if self._sending:
@@ -862,6 +940,7 @@ class FisoChatApp(App):
         self.query_one("#messages", RichLog).clear()
         self._merge_messages(batch)
         self.notice("Enter 发送 · Shift+Enter 换行 · /groups 切群 · /help 帮助")
+        self._dismiss_mention_alerts(group_id)
 
     def author_alias(self, message: dict[str, Any]) -> str:
         aliases = self._aliases.setdefault(self.selected_group or "", {})
