@@ -1,0 +1,1 @@
+{"file": ".trellis/tasks/09-20-copy-history-without-soft-wrap-newlines/research/current-behavior.md", "reason": "Use the verified RichLog visual-line behavior and existing selection implementation to preserve logical boundaries."}

@@ -1,0 +1,1 @@
+{"file": ".trellis/tasks/09-20-copy-history-without-soft-wrap-newlines/research/current-behavior.md", "reason": "Verify soft wraps are removed without regressing distinct-entry boundaries, wide characters, selection, focus, or drafts."}

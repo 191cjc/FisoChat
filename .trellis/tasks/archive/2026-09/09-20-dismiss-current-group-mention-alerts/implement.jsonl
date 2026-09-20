@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/terminal-mention-alerts.md", "reason": "Preserve the global cursor, terminal-only popup, deduplication, state-preservation, and no-send contracts while adding current-group suppression."}
+{"file": ".trellis/tasks/09-20-dismiss-current-group-mention-alerts/research/current-behavior.md", "reason": "Use the verified Textual notification lifecycle and existing alert/group-selection call sites."}

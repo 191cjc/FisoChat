@@ -1,0 +1,29 @@
+{
+  "id": "terminal-alert-copy-behavior",
+  "name": "terminal-alert-copy-behavior",
+  "title": "Terminal alert and copy behavior",
+  "description": "Refine terminal mention-alert dismissal and preserve logical message text when copying visually wrapped history.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "chenjiachun",
+  "assignee": "chenjiachun",
+  "createdAt": "2026-09-20",
+  "completedAt": "2026-09-20",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-20-dismiss-current-group-mention-alerts",
+    "09-20-copy-history-without-soft-wrap-newlines"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

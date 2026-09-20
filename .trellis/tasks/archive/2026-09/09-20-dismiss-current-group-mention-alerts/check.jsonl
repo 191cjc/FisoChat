@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/terminal-mention-alerts.md", "reason": "Verify cursor progression, popup safety, reconnect behavior, state preservation, and no QQ side effects remain intact."}
+{"file": ".trellis/tasks/09-20-dismiss-current-group-mention-alerts/research/current-behavior.md", "reason": "Check current-group suppression and targeted dismissal against the observed Textual APIs and existing regressions."}

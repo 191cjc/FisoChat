@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/terminal-mention-alerts.md", "reason": "Verify integrated alert behavior remains terminal-only and cursor-safe."}
+{"file": ".trellis/tasks/09-20-copy-history-without-soft-wrap-newlines/research/current-behavior.md", "reason": "Verify integrated copy behavior preserves logical message boundaries."}
