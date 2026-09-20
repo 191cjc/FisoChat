@@ -127,3 +127,25 @@ Bound both lowercase s and Shift+S to manual sticker collection, added regressio
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: Refine terminal alerts and history copying
+<!-- trellis-session: v=2 fp=efc5c3999f462142 -->
+
+**Date**: 2026-09-20
+**Task**: Refine terminal alerts and history copying
+**Branch**: `main`
+
+### Summary
+
+Suppressed mention popups for the selected group, dismissed only matching group alerts on navigation with race-safe lifecycle cleanup, and copied wrapped history without injecting visual newlines while preserving logical message boundaries.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1fbacd0` | fix: refine terminal alerts and history copying |
+
+### Status
+
+[OK] **Completed**
