@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-09-20
+- **Total Sessions**: 7
+- **Last Active**: 2026-09-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~151 | Active |
+| `journal-1.md` | ~173 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-09-22 | Persist mentionable group members | `7f62672` | `feat/persist-mention-members` |
 | 6 | 2026-09-20 | Refine terminal alerts and history copying | `1fbacd0` | `main` |
 | 5 | 2026-09-20 | Fix uppercase sticker save shortcut | `f3479c6` | `main` |
 | 4 | 2026-09-18 | Multiline composer and terminal mention alerts | `58df9e2` | `main` |

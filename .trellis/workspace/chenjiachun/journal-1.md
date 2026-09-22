@@ -149,3 +149,25 @@ Suppressed mention popups for the selected group, dismissed only matching group 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Persist mentionable group members
+<!-- trellis-session: v=2 fp=c80fe0c8a2fcd393 -->
+
+**Date**: 2026-09-22
+**Task**: Persist mentionable group members
+**Branch**: `feat/persist-mention-members`
+
+### Summary
+
+Derived persistent per-group mention candidates from existing message history, added the authenticated member projection and terminal live updates, documented the cross-layer contract, verified 175 tests, and restarted the healthy QQ service.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7f62672` | feat: persist mentionable group members |
+
+### Status
+
+[OK] **Completed**
