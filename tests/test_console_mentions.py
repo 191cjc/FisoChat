@@ -38,6 +38,78 @@ class MentionEditTests(unittest.TestCase):
 
 
 class MentionConsoleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_historical_speaker_outside_loaded_messages_is_searchable(self):
+        client = MentionClient()
+        client.records["group-a"][0].update(
+            username="很久以前的成员",
+            sender_key="historical-person",
+            can_mention=True,
+        )
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+
+            self.assertNotIn(1, app.messages)
+            await pilot.press("@", "很", "久")
+
+            self.assertEqual(
+                [member.sender_key for member in composer.mention_matches],
+                ["historical-person"],
+            )
+            await pilot.press("enter")
+            self.assertEqual(composer.mentions[0].member.record_id, 1)
+
+    async def test_live_messages_add_and_rename_persistent_members_in_place(self):
+        client = MentionClient()
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            client.records["group-a"].append({
+                **client.records["group-a"][-1],
+                "record_id": 82,
+                "message_id": "new-speaker",
+                "username": "新成员",
+                "sender_key": "live-person",
+            })
+
+            await app._refresh()
+
+            live = next(member for member in composer.members if member.sender_key == "live-person")
+            self.assertEqual((live.record_id, live.username), (82, "新成员"))
+            client.records["group-a"].append({
+                **client.records["group-a"][-1],
+                "record_id": 83,
+                "message_id": "renamed-speaker",
+                "username": "新昵称",
+            })
+
+            await app._refresh()
+
+            matching = [member for member in composer.members if member.sender_key == "live-person"]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual((matching[0].record_id, matching[0].username), (83, "新昵称"))
+
+    async def test_group_switch_replaces_persistent_member_directory(self):
+        client = MentionClient()
+        client.records["group-a"][0].update(
+            username="甲群旧成员", sender_key="group-a-historical", can_mention=True
+        )
+        client.records["group-b"][-1].update(username="乙群成员")
+        app = FisoChatApp(client)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one(CommandInput)
+            self.assertIn("group-a-historical", {member.sender_key for member in composer.members})
+
+            await app.command("/use 2")
+
+            self.assertEqual(
+                [(member.sender_key, member.username) for member in composer.members],
+                [("person-c", "乙群成员")],
+            )
+
     async def test_other_bot_can_be_selected_and_sent_while_own_messages_are_excluded(self):
         client = MentionClient()
         client.records["group-a"][-2].update(

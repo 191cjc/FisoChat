@@ -695,6 +695,7 @@ class FisoChatApp(App):
         self.groups: list[dict[str, Any]] = []
         self.selected_group: str | None = None
         self.messages: dict[int, dict[str, Any]] = {}
+        self._member_directory: dict[str, MentionMember] = {}
         self.latest_record_id: int | None = None
         self.reply_to: dict[str, Any] | None = None
         self.drafts: dict[str, str] = {}
@@ -919,13 +920,16 @@ class FisoChatApp(App):
             self.notice(str(exc), error=True)
 
     async def _select_group(self, group_id: str) -> None:
-        batch = await self.client.messages(group_id)
+        batch, members = await asyncio.gather(
+            self.client.messages(group_id), self.client.members(group_id)
+        )
         input_widget = self.query_one("#input", CommandInput)
         if self.selected_group:
             self.drafts[self.selected_group] = input_widget.value
             self.draft_mentions[self.selected_group] = list(input_widget.mentions)
         self.selected_group = group_id
         self.messages = {}
+        self._member_directory = {}
         self.latest_record_id = None
         self.reply_to = None
         self.show_names = False
@@ -939,6 +943,7 @@ class FisoChatApp(App):
         self.query_one("#group-title", Static).update(Text(f"群聊 {group_label}  ·  /groups 切换"))
         self.query_one("#messages", RichLog).clear()
         self._merge_messages(batch)
+        self._replace_member_directory(members)
         self.notice("Enter 发送 · Shift+Enter 换行 · /groups 切群 · /help 帮助")
         self._dismiss_mention_alerts(group_id)
 
@@ -965,12 +970,37 @@ class FisoChatApp(App):
                              single_line(record["username"]) or "群成员", self.author_alias(record))
 
     def _refresh_members(self) -> None:
-        members = {}
-        for _, record in sorted(self.messages.items(), reverse=True):
-            member = self.mention_member(record)
-            if member is not None:
-                members.setdefault(member.sender_key, member)
-        self.query_one(CommandInput).set_members(tuple(members.values()))
+        members = sorted(
+            self._member_directory.values(),
+            key=lambda member: member.record_id,
+            reverse=True,
+        )
+        self.query_one(CommandInput).set_members(tuple(members))
+
+    def _upsert_member(self, record: dict[str, Any]) -> None:
+        member = self.mention_member(record)
+        if member is None:
+            return
+        current = self._member_directory.get(member.sender_key)
+        if current is None or member.record_id > current.record_id:
+            self._member_directory[member.sender_key] = member
+
+    def _replace_member_directory(self, records: list[dict[str, Any]]) -> None:
+        self._member_directory = {}
+        for record in records:
+            member = MentionMember(
+                record["record_id"],
+                record["sender_key"],
+                single_line(record["username"]) or "群成员",
+                self.author_alias(record),
+            )
+            current = self._member_directory.get(member.sender_key)
+            if current is None or member.record_id > current.record_id:
+                self._member_directory[member.sender_key] = member
+        # A message fetched concurrently with the projection can be newer.
+        for record in self.messages.values():
+            self._upsert_member(record)
+        self._refresh_members()
 
     def _redraw_messages(self) -> None:
         log = self.query_one("#messages", RichLog)
@@ -996,6 +1026,7 @@ class FisoChatApp(App):
         for message in fresh:
             self.messages[message["record_id"]] = message
             self.author_alias(message)
+            self._upsert_member(message)
         self.latest_record_id = max(self.messages)
         if len(self.messages) > 2000:
             self.messages = dict(sorted(self.messages.items())[-2000:])

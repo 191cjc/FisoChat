@@ -527,6 +527,65 @@ class GroupMessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await self.repository.scan_after(3), ())
 
+    async def test_mentionable_members_use_latest_eligible_record_per_group(self):
+        async def add_member(
+            message_id, member_openid, username, *, group_id="group-a", bot=False
+        ):
+            event_type, payload = group_event(message_id, group_id=group_id)
+            payload["d"]["author"].update(
+                member_openid=member_openid,
+                username=username,
+                bot=bot,
+            )
+            self.assertTrue(
+                await self.repository.add_gateway_event(event_type, payload)
+            )
+
+        await add_member("alice-old", "member-alice", "Alice")
+        await add_member("bob", "member-bob", "Bob")
+        await add_member("alice-new", "member-alice", "Alice 新昵称")
+        await add_member(
+            "alice-other-group", "member-alice", "另一个群的 Alice", group_id="group-b"
+        )
+        await add_member("missing-openid", "", "无 ID")
+        await add_member("invalid-openid", "invalid.openid", "无效 ID")
+        await add_member("other-bot", "member-other-bot", "群助手", bot=True)
+        await self.repository.add_bot_message(
+            message_id="own-send",
+            group_openid="group-a",
+            username="FisoChat",
+            content="outbound",
+            message_type=0,
+            sent_at=datetime.now(timezone.utc).isoformat(),
+            payload={"content": "outbound"},
+        )
+        await add_member("alice-recalled", "member-alice", "不应显示的昵称")
+        async with self.repository._database.transaction() as connection:
+            await connection.execute(
+                "UPDATE group_messages SET recalled_at = ? "
+                "WHERE group_openid = ? AND message_id = ?",
+                ("2026-09-22T00:00:00+00:00", "group-a", "alice-recalled"),
+            )
+
+        members = await self.repository.mentionable_members("group-a")
+
+        self.assertEqual(
+            [record.message_id for record in members],
+            ["other-bot", "invalid-openid", "alice-new", "bob"],
+        )
+        self.assertEqual(
+            [record.username for record in members],
+            ["群助手", "无效 ID", "Alice 新昵称", "Bob"],
+        )
+        self.assertTrue(members[0].is_bot)
+        self.assertNotIn("missing-openid", {record.message_id for record in members})
+        self.assertNotIn("own-send", {record.message_id for record in members})
+        self.assertEqual(
+            [record.message_id for record in await self.repository.mentionable_members("group-b")],
+            ["alice-other-group"],
+        )
+        self.assertEqual(await self.repository.mentionable_members(""), ())
+
     async def test_reference_contains_non_at_messages_and_bot_final_replies(self):
         await self.add_event("plain", content="not mentioned")
         await self.add_event(

@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/09-21-persist-mention-members/research/current-behavior.md","reason":"Verify historical discovery, group isolation, other-bot compatibility, and the unchanged record-anchor trust boundary."}
+{"file":".trellis/spec/backend/terminal-composer.md","reason":"Check completion, offsets, multiline editing, drafts, focus, and failure recovery for regressions."}
+{"file":".trellis/spec/backend/persistent-mention-members.md","reason":"Verify message-derived discovery, endpoint projection, group isolation, live updates, and record-anchor validation."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check the complete member identity flow and validation ownership at every boundary."}

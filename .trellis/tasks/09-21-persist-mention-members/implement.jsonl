@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/09-21-persist-mention-members/research/current-behavior.md","reason":"Use the verified stored identity, terminal limitation, trust boundary, and minimal extension evidence."}
+{"file":".trellis/spec/backend/terminal-composer.md","reason":"Preserve member completion, flat offsets, input limits, per-group drafts, disabled state, and failure restoration."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace member identity and validation across SQLite, loopback HTTP, terminal state, and QQ sending."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the existing eligibility validator, sender-key projection, and message-derived identity contract."}

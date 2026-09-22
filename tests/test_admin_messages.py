@@ -3,6 +3,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from multidict import MultiDict
+
 from fisochat.database.models import StoredGroupMessage
 from fisochat.interfaces.web.admin_messages import AdminMessageHandler, _can_mention
 from fisochat.interfaces.web.message_display import mentions_current_bot
@@ -16,7 +18,7 @@ class FakeRequest:
         self._payload = payload
         self.headers = {"Authorization": f"Bearer {token}"}
         self.remote = remote
-        self.query = query or {}
+        self.query = MultiDict(query or ())
 
     async def json(self):
         return self._payload
@@ -27,6 +29,7 @@ class FakeRepository:
         self.context = context
         self.calls = []
         self.records = records
+        self.member_calls = []
 
     async def find_console_reply_context(self, group_id, *, message_id=None):
         self.calls.append((group_id, message_id))
@@ -36,6 +39,10 @@ class FakeRepository:
         return tuple(
             record for record in self.records if record.record_id > after_record_id
         )[:limit]
+
+    async def mentionable_members(self, group_id):
+        self.member_calls.append(group_id)
+        return self.records
 
 
 class FakeSender:
@@ -70,6 +77,98 @@ class AdminMessageHandlerTests(unittest.IsolatedAsyncioTestCase):
             2,
             datetime.now(timezone.utc) + timedelta(minutes=4),
         )
+
+    def member_record(self, record_id, **overrides):
+        values = {
+            "record_id": record_id,
+            "message_id": f"message-{record_id}",
+            "event_id": f"event-{record_id}",
+            "event_type": "GROUP_MESSAGE_CREATE",
+            "group_openid": "group-1",
+            "member_openid": f"member-{record_id}",
+            "username": f"member {record_id}",
+            "member_role": "member",
+            "is_bot": False,
+            "content": "hello",
+            "message_type": 0,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {},
+        }
+        values.update(overrides)
+        return StoredGroupMessage(**values)
+
+    async def test_member_projection_filters_and_hides_openids(self):
+        records = (
+            self.member_record(6, username="最近成员"),
+            self.member_record(5, username="群助手", is_bot=True),
+            self.member_record(4, member_openid="invalid.openid"),
+            self.member_record(3, recalled_at="2026-09-22T00:00:00+00:00"),
+            self.member_record(
+                2,
+                event_type="BOT_MESSAGE_CREATE",
+                member_openid="",
+                username="FisoChat",
+                is_bot=True,
+            ),
+        )
+        repository = FakeRepository(None, records=records)
+        handler = AdminMessageHandler(
+            repository,
+            FakeSender(),
+            token="secret",
+            sticker_store=object(),
+            sticker_signer=object(),
+        )
+
+        response = await handler.list_members(
+            FakeRequest(None, query={"group": "group-1"})
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        body = json.loads(response.text)
+        self.assertEqual(repository.member_calls, ["group-1"])
+        self.assertEqual(
+            [(item["record_id"], item["username"]) for item in body["members"]],
+            [(6, "最近成员"), (5, "群助手")],
+        )
+        for member in body["members"]:
+            self.assertEqual(set(member), {"record_id", "sender_key", "username"})
+            self.assertNotIn("member_openid", member)
+            self.assertEqual(len(member["sender_key"]), 24)
+
+    async def test_member_projection_requires_auth_and_exactly_one_valid_group(self):
+        repository = FakeRepository(None)
+        handler = AdminMessageHandler(
+            repository,
+            FakeSender(),
+            token="secret",
+            sticker_store=object(),
+            sticker_signer=object(),
+        )
+        requests = (
+            FakeRequest(None, token="wrong", query={"group": "group-1"}),
+            FakeRequest(
+                None,
+                remote="203.0.113.4",
+                query={"group": "group-1"},
+            ),
+            FakeRequest(None),
+            FakeRequest(None, query={"group": ""}),
+            FakeRequest(None, query={"group": "invalid.group"}),
+            FakeRequest(
+                None,
+                query=[("group", "group-1"), ("group", "group-2")],
+            ),
+        )
+
+        statuses = [
+            (await handler.list_members(request)).status for request in requests
+        ]
+
+        self.assertEqual(statuses, [401, 403, 400, 400, 400, 400])
+        self.assertEqual(repository.member_calls, [])
 
     async def test_valid_request_uses_context_and_console_origin(self):
         repository = FakeRepository(self.context())

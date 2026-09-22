@@ -48,6 +48,10 @@ class AdminMessageRepository(BotMessageRepository, Protocol):
         before_record_id: int | None = None, after_record_id: int | None = None,
     ) -> Sequence[StoredGroupMessage]: ...
 
+    async def mentionable_members(
+        self, group_id: str
+    ) -> Sequence[StoredGroupMessage]: ...
+
     async def scan_after(
         self, after_record_id: int, *, limit: int = 100
     ) -> Sequence[StoredGroupMessage]: ...
@@ -127,6 +131,23 @@ class AdminMessageHandler:
         ordered = messages if after is not None else reversed(messages)
         return web.json_response({"messages": [_message_view(message) for message in ordered]},
                                  headers={"Cache-Control": "no-store"})
+
+    async def list_members(self, request: web.Request) -> web.Response:
+        denied = self._access_error(request)
+        if denied is not None:
+            return denied
+        group_values = request.query.getall("group", [])
+        if len(group_values) != 1 or not GROUP_ID_RE.fullmatch(group_values[0]):
+            return _error("invalid_group", "请选择有效的群组。", 400)
+        members = await self._repository.mentionable_members(group_values[0])
+        return web.json_response(
+            {
+                "members": [
+                    _member_view(member) for member in members if _can_mention(member)
+                ]
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def list_group_mention_alerts(
         self, request: web.Request
@@ -421,6 +442,7 @@ def register_admin_message_routes(
     )
     application.router.add_get("/internal/groups", handler.list_groups)
     application.router.add_get("/internal/group-messages", handler.list_messages)
+    application.router.add_get("/internal/group-members", handler.list_members)
     application.router.add_get(
         "/internal/group-mention-alerts", handler.list_group_mention_alerts
     )
@@ -495,11 +517,9 @@ def _mention_alert_view(message: StoredGroupMessage) -> dict[str, Any]:
 def _message_view(message: StoredGroupMessage) -> dict[str, Any]:
     attachments = message.payload.get("attachments", [])
     names = mention_names(message.payload)
-    sender = message.member_openid or ("bot" if message.is_bot else f"name:{message.username}")
-    sender_key = hashlib.sha256(f"{message.group_openid}\0{sender}".encode()).hexdigest()[:24]
     return {
         "record_id": message.record_id, "message_id": message.message_id,
-        "sender_key": sender_key,
+        "sender_key": _sender_key(message),
         "username": message.username or ("FisoChat" if message.is_bot else "群成员"),
         "is_bot": message.is_bot, "content": readable_mentions(message.content, names),
         "can_mention": _can_mention(message),
@@ -513,6 +533,23 @@ def _message_view(message: StoredGroupMessage) -> dict[str, Any]:
             if isinstance(item, dict) and safe_http_url(item.get("url"))
         ],
     }
+
+
+def _member_view(message: StoredGroupMessage) -> dict[str, Any]:
+    return {
+        "record_id": message.record_id,
+        "sender_key": _sender_key(message),
+        "username": message.username or "群成员",
+    }
+
+
+def _sender_key(message: StoredGroupMessage) -> str:
+    sender = message.member_openid or (
+        "bot" if message.is_bot else f"name:{message.username}"
+    )
+    return hashlib.sha256(
+        f"{message.group_openid}\0{sender}".encode()
+    ).hexdigest()[:24]
 
 
 def _can_mention(message: StoredGroupMessage) -> bool:

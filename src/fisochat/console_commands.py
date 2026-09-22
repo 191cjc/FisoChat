@@ -238,7 +238,7 @@ class CommandInput(TextArea):
                                          if search in member.username.casefold() or search in member.alias.casefold())
             self.command_index = min(self.command_index, max(0, len(self.mention_matches) - 1))
             if not self.mention_matches:
-                self.command_hint = Text("没有匹配的群成员 · 可用 /older 加载更早消息", style="dim")
+                self.command_hint = Text("没有匹配的曾发言成员", style="dim")
                 return
             self.command_hint = Text(
                 f"@ 成员 {self.command_index + 1}/{len(self.mention_matches)} · ↑↓ 选择 · Tab / Enter 确认",
@@ -252,7 +252,7 @@ class CommandInput(TextArea):
                 self.command_hint.append("\n" + ("› " if selected else "  "), style="cyan")
                 self.command_hint.append(f"{member.username}〔{member.alias}〕  #{member.record_id}",
                                          style="bold cyan" if selected else "default")
-            self.command_hint.append("\n从当前群已加载消息选择 · Esc 收起", style="dim")
+            self.command_hint.append("\n从当前群曾发言成员选择 · Esc 收起", style="dim")
         elif self.mentions:
             names = dict.fromkeys(f"{span.member.username}〔{span.member.alias}〕" for span in self.mentions)
             self.command_hint = Text("将 @：" + "、".join(names), style="cyan", no_wrap=True, overflow="ellipsis")

@@ -324,6 +324,41 @@ class GroupMessageRepository:
                 rows = await cursor.fetchall()
         return tuple(_row_to_message(row) for row in rows)
 
+    async def mentionable_members(
+        self, group_id: str
+    ) -> tuple[StoredGroupMessage, ...]:
+        """Return the latest usable gateway record for each observed member."""
+        if not group_id:
+            return ()
+        await self.initialize()
+        async with self._database.read() as connection:
+            async with connection.execute(
+                """
+                SELECT messages.*
+                FROM group_messages AS messages
+                WHERE messages.group_openid = ?
+                  AND messages.member_openid <> ''
+                  AND messages.event_type IN (
+                      'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'
+                  )
+                  AND messages.recalled_at = ''
+                  AND messages.record_id = (
+                      SELECT MAX(candidate.record_id)
+                      FROM group_messages AS candidate
+                      WHERE candidate.group_openid = messages.group_openid
+                        AND candidate.member_openid = messages.member_openid
+                        AND candidate.event_type IN (
+                            'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'
+                        )
+                        AND candidate.recalled_at = ''
+                  )
+                ORDER BY messages.record_id DESC
+                """,
+                (group_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return tuple(_row_to_message(row) for row in rows)
+
     async def scan_after(
         self, after_record_id: int, *, limit: int = 100
     ) -> tuple[StoredGroupMessage, ...]:

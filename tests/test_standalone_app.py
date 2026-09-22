@@ -98,6 +98,7 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         await self.capture(event("incoming"))
         for route in (
             "/internal/groups", "/internal/group-messages?group=group-1",
+            "/internal/group-members?group=group-1",
             "/internal/group-mention-alerts?after=0", "/internal/stickers",
         ):
             self.assertEqual((await self.client.get(route)).status, 401)
@@ -118,6 +119,88 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/stickers/" + "a" * 64)).status, 404)
         self.assertEqual((await self.client.get("/")).status, 404)
         self.assertEqual((await self.client.get("/group-messages")).status, 404)
+
+    async def test_member_directory_route_and_client_use_stored_group_history(self):
+        alice_old = event("alice-old")
+        alice_old["d"]["author"].update(
+            member_openid="member-alice", username="Alice"
+        )
+        bob = event("bob")
+        bob["d"]["author"].update(member_openid="member-bob", username="Bob")
+        alice_new = event("alice-new")
+        alice_new["d"]["author"].update(
+            member_openid="member-alice", username="Alice 新昵称"
+        )
+        other_group = event("other-group", group="group-2")
+        other_group["d"]["author"].update(
+            member_openid="member-alice", username="另一个群的 Alice"
+        )
+        invalid = event("invalid")
+        invalid["d"]["author"].update(
+            member_openid="invalid.openid", username="无效 ID"
+        )
+        missing = event("missing")
+        missing["d"]["author"].update(member_openid="", username="无 ID")
+        other_bot = event("other-bot")
+        other_bot["d"]["author"].update(
+            member_openid="member-other-bot", username="群助手", bot=True
+        )
+        for payload in (
+            alice_old,
+            bob,
+            alice_new,
+            other_group,
+            invalid,
+            missing,
+            other_bot,
+        ):
+            await self.capture(payload)
+        await self.recorder.repository.add_bot_message(
+            message_id="own-send",
+            group_openid="group-1",
+            username="FisoChat",
+            content="outbound",
+            message_type=0,
+            sent_at=datetime.now(timezone.utc).isoformat(),
+            payload={"content": "outbound"},
+        )
+        headers = {"Authorization": "Bearer local-token"}
+
+        response = await self.client.get(
+            "/internal/group-members?group=group-1", headers=headers
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        members = (await response.json())["members"]
+        self.assertEqual(
+            [(member["record_id"], member["username"]) for member in members],
+            [(7, "群助手"), (3, "Alice 新昵称"), (2, "Bob")],
+        )
+        self.assertTrue(all(set(member) == {"record_id", "sender_key", "username"}
+                            for member in members))
+        self.assertNotIn("member_openid", json.dumps(members))
+
+        console = ConsoleClient(str(self.client.make_url("/")), "local-token")
+        await console.open()
+        try:
+            self.assertEqual(await console.members("group-1"), members)
+        finally:
+            await console.close()
+
+        for query in (
+            "",
+            "?group=",
+            "?group=invalid.group",
+            "?group=group-1&group=group-2",
+        ):
+            invalid_response = await self.client.get(
+                "/internal/group-members" + query, headers=headers
+            )
+            self.assertEqual(invalid_response.status, 400, query)
+            self.assertEqual(
+                (await invalid_response.json())["error"]["code"], "invalid_group"
+            )
 
     async def test_group_mention_feed_filters_and_advances_global_cursor(self):
         await self.capture(event("ordinary", group="group-1"))
@@ -458,6 +541,7 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertEqual((await console.groups())[0]["group_openid"], "group-1")
             self.assertEqual((await console.messages("group-1"))[0]["message_id"], "transport-message")
+            self.assertEqual((await console.members("group-1"))[0]["record_id"], 1)
             self.assertFalse((await console.health())["qq_gateway"]["connected"])
             sent = await console.send("group-1", "终端接口联调")
             self.assertTrue(sent["recorded"])
@@ -469,7 +553,7 @@ class StandaloneAppTests(unittest.IsolatedAsyncioTestCase):
         await denied.open()
         try:
             with self.assertRaisesRegex(ConsoleError, "Token"):
-                await denied.groups()
+                await denied.members("group-1")
         finally:
             await denied.close()
 

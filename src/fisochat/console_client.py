@@ -132,6 +132,13 @@ class ConsoleClient:
             params["after"] = str(after)
         return (await self._request("GET", "/internal/group-messages", params=params))["messages"]
 
+    async def members(self, group: str) -> list[dict[str, Any]]:
+        return (
+            await self._request(
+                "GET", "/internal/group-members", params={"group": group}
+            )
+        )["members"]
+
     async def mention_alerts(
         self, after: int, *, limit: int = 100
     ) -> dict[str, Any]:

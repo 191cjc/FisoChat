@@ -65,6 +65,21 @@ class FakeClient:
             return deepcopy([record for record in records if record["record_id"] > after][:100])
         return deepcopy(records[-50:])
 
+    async def members(self, group):
+        members = {}
+        for record in sorted(self.records[group], key=lambda item: item["record_id"], reverse=True):
+            if not record.get("can_mention") or record.get("recalled"):
+                continue
+            sender_key = record.get("sender_key")
+            if not sender_key or sender_key in members:
+                continue
+            members[sender_key] = {
+                "record_id": record["record_id"],
+                "sender_key": sender_key,
+                "username": record["username"],
+            }
+        return deepcopy(list(members.values()))
+
     async def mention_alerts(self, after, *, limit=100):
         if not self.online:
             raise ConsoleError("无法连接后台")
