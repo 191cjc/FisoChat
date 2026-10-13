@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/09-20-recall-specific-message/research/current-behavior.md","reason":"Verify all researched eligibility, failure, no-retry, terminal redraw, and compatibility contracts."}
+{"file":".trellis/spec/backend/reply-context.md","reason":"Check that a local record ID never crosses into the QQ message-ID boundary and group scoping remains enforced."}
+{"file":".trellis/spec/backend/terminal-composer.md","reason":"Check command behavior and that busy/error paths restore terminal input state without regressing existing composer contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review the full recall data flow and failure mapping at every layer boundary."}

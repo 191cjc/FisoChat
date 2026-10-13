@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/09-20-recall-specific-message/research/current-behavior.md","reason":"Use the verified sender, repository, admin API, terminal cache, error, and compatibility evidence for implementation."}
+{"file":".trellis/spec/backend/reply-context.md","reason":"Preserve the core distinction between terminal-local record IDs and opaque QQ message IDs across the new recall flow."}
+{"file":".trellis/spec/backend/terminal-composer.md","reason":"Preserve slash-command submission, disabled/read-only input, focus restoration, drafts, and existing send behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace group and message identity, typed outcomes, error mapping, and recalled state across terminal, HTTP, repository, and QQ boundaries."}
